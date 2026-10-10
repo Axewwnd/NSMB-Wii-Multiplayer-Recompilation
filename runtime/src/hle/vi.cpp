@@ -801,6 +801,33 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
         std::lock_guard<std::mutex> lock(g_viMutex);
         s_lastPacedRetraceCount = g_vi.retraceCount;
     }
+    // Always on: a frame that took over 20 ms (a dropped frame at 60) goes to the log with where the
+    // time went, so a report of drops on someone's machine comes with its cause. At most 30 a minute.
+    if (presentedXfb) {
+        static Clock::time_point s_lastEnd{}, s_windowStart{};
+        static int s_logged = 0;
+        static uint64_t s_lastGx = 0;
+        const uint64_t gxTotal = AuroraGxProcessNanosTotal();
+        const double gxMs = (gxTotal - s_lastGx) / 1e6;
+        s_lastGx = gxTotal;
+        const Clock::time_point now = Clock::now();
+        if (s_lastEnd != Clock::time_point{}) {
+            const double frame = ms(now - s_lastEnd);
+            if (now - s_windowStart > std::chrono::minutes(1)) {
+                s_windowStart = now;
+                s_logged = 0;
+            }
+            if (frame > 20.0 && frame < 2000.0 && s_logged++ < 30) {
+                uint32_t sceneWord = 0;
+                Memory::TryRead32(0x80428730u, sceneWord);
+                RT_LOGF(RT_TAG_VI,
+                        "slow frame %.1f ms (scene 0x%03X): game %.2f (gx %.2f), present %.2f, end_frame %.2f, pace %.2f\n",
+                        frame, sceneWord & 0xFFFFu, ms(presentStart - s_lastEnd), gxMs, ms(endFrameStart - presentStart),
+                        ms(paceStart - endFrameStart), ms(now - paceStart));
+            }
+        }
+        s_lastEnd = now;
+    }
     if (LogFpsEnabled() && presentedXfb) {
         const Clock::time_point now = Clock::now();
         if (times.lastPresentEnd != Clock::time_point{}) {

@@ -17,6 +17,9 @@ void ReleaseControllers() noexcept;
 // FPS counter on or off (the Android menu sets it through JNI); saved to Config.toml.
 void SetShowFps(bool show) noexcept;
 bool ShowFps() noexcept;
+// A frame-time graph under the FPS counter, off by default. Saved to Config.toml.
+void SetFrameGraph(bool show) noexcept;
+bool FrameGraph() noexcept;
 // Animated tiles (spinning coins, ? blocks...), on by default. Saved to Config.toml.
 void SetSpinningCoins(bool enabled) noexcept;
 bool SpinningCoins() noexcept;

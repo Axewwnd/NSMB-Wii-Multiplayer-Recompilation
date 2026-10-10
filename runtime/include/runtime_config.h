@@ -51,6 +51,7 @@ struct RuntimeUserConfig {
     std::optional<bool> textureDumps;
     std::optional<bool> showFps;
     std::optional<bool> spinningCoins;  // NSMBW: [video] spinning_coins, animated tiles
+    std::optional<bool> frameGraph;     // NSMBW: [video] frame_graph, frame times under the FPS counter
     std::optional<uint32_t> disabledPostProcessingPaths;
     std::optional<float> audioVolume;
     std::optional<float> audioMusicVolume;
@@ -566,6 +567,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.disableCopyFilter = FindConfigValue<bool>(document, "video", "disable_copy_filter");
     config.showFps = FindConfigValue<bool>(document, "video", "show_fps");
     config.spinningCoins = FindConfigValue<bool>(document, "video", "spinning_coins");
+    config.frameGraph = FindConfigValue<bool>(document, "video", "frame_graph");
     config.textureReplacements = FindConfigValue<bool>(document, "video", "texture_replacements");
     config.textureDumps = FindConfigValue<bool>(document, "video", "texture_dumps");
     if (auto value = FindConfigUint(document, "video", "disabled_post_processing_paths");
@@ -803,6 +805,15 @@ inline bool SpinningCoins(bool fallback = true) {
 inline bool SetSpinningCoins(bool value) {
     Mutable().spinningCoins = value;
     return WriteSetting("video", "spinning_coins", value ? "true" : "false");
+}
+
+inline bool FrameGraph(bool fallback = false) {
+    return Get().frameGraph.value_or(fallback);
+}
+
+inline bool SetFrameGraph(bool value) {
+    Mutable().frameGraph = value;
+    return WriteSetting("video", "frame_graph", value ? "true" : "false");
 }
 
 inline bool SetShowFps(bool value) {

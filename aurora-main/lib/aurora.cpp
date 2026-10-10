@@ -1074,6 +1074,29 @@ bool present_presentation_job(const PresentationJob& job) {
     }
   } else {
     s_consecutiveStalledPresents = 0;
+    // Shorter hitches than the stall warning, which still cost a 60 Hz frame: logged (at most 30 a
+    // minute) so dropped frames on a player's machine show where the presenter lost the time.
+    static PresentClock::time_point s_hitchWindow{};
+    static int s_hitchesLogged = 0;
+    const auto hitchNow = PresentClock::now();
+    if (hitchNow - s_hitchWindow > std::chrono::minutes(1)) {
+      s_hitchWindow = hitchNow;
+      s_hitchesLogged = 0;
+    }
+    // The schedule wait is the pacing itself, not lost time.
+    const auto workDuration = totalDuration - scheduleWaitDuration;
+    if ((workDuration >= std::chrono::milliseconds(12) || lateBy >= std::chrono::milliseconds(8) || !presented) &&
+        s_hitchesLogged++ < 30) {
+      Log.info("Presentation hitch: {:.1f} ms{} (late at dequeue {:.1f}, acquire {:.1f}, encode {:.1f}, submit "
+               "{:.1f}, schedule wait {:.1f}, present {:.1f})",
+               std::chrono::duration<double, std::milli>(totalDuration).count(), presented ? "" : ", not presented",
+               std::chrono::duration<double, std::milli>(lateBy).count(),
+               std::chrono::duration<double, std::milli>(acquireDuration).count(),
+               std::chrono::duration<double, std::milli>(encodeDuration).count(),
+               std::chrono::duration<double, std::milli>(submitDuration).count(),
+               std::chrono::duration<double, std::milli>(scheduleWaitDuration).count(),
+               std::chrono::duration<double, std::milli>(presentDuration).count());
+    }
   }
   return presented;
 }
@@ -1758,17 +1781,24 @@ bool run_frame_worker_cycle(gfx::SealedFrame& sealedFrame) noexcept {
   SealedFrameContext ctx;
   std::vector<PresentationJob> presentationJobs;
   bool overlapEncode = false;
+  // Stage times of a cycle, logged when it runs long (the producer waits on it in GXDrawDone).
+  using WorkerClock = std::chrono::steady_clock;
+  const auto cycleStart = WorkerClock::now();
+  WorkerClock::time_point sealed{}, encoded{};
   {
     std::lock_guard gpuLock(g_rendererGpuMutex);
     seal_frame_locked(sealedFrame, ctx);
+    sealed = WorkerClock::now();
     overlapEncode = ctx.interpolationActive;
     if (!overlapEncode) {
       presentationJobs = encode_sealed_frame(sealedFrame, ctx);
     }
+    encoded = WorkerClock::now();
   }
   if (!overlapEncode) {
     publish_presentations(std::move(presentationJobs), ctx.interpolationActive);
   }
+  const auto published = WorkerClock::now();
 
   {
     std::unique_lock lock(g_frameWorker.mutex);
@@ -1782,9 +1812,27 @@ bool run_frame_worker_cycle(gfx::SealedFrame& sealedFrame) noexcept {
   // Preparing the next frame belongs to the SEALED phase: without a fresh pass 0 and mapped
   // staging buffers the producer's drain has nowhere to put its commands.
   bool imguiNewFrameOwed = false;
+  const auto prepareStart = WorkerClock::now();
   const bool prepared = begin_frame_impl(
       false, overlapEncode ? ImGuiFramePolicy::Deferred : ImGuiFramePolicy::Immediate,
       &imguiNewFrameOwed);
+  {
+    const auto prepareEnd = WorkerClock::now();
+    const auto msOf = [](WorkerClock::duration d) { return std::chrono::duration<double, std::milli>(d).count(); };
+    const double busy = msOf(published - cycleStart) + msOf(prepareEnd - prepareStart);
+    static WorkerClock::time_point s_window{};
+    static int s_logged = 0;
+    if (prepareEnd - s_window > std::chrono::minutes(1)) {
+      s_window = prepareEnd;
+      s_logged = 0;
+    }
+    if (busy >= 16.7 && s_logged++ < 30) {
+      Log.info("Slow render frame: {:.1f} ms (seal {:.1f}, encode {:.1f}, publish {:.1f}, prepare next {:.1f}; "
+               "{} pipelines queued)",
+               busy, msOf(sealed - cycleStart), msOf(encoded - sealed), msOf(published - encoded),
+               msOf(prepareEnd - prepareStart), gfx::g_stats.queuedPipelines);
+    }
+  }
 
   {
     std::lock_guard lock(g_frameWorker.mutex);

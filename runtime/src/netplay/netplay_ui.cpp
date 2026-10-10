@@ -2,6 +2,7 @@
 
 #include "netplay/game_layout.h"
 #include "netplay/game_menus.h"
+#include "netplay/world_map_nav.h"
 #include "netplay_lobby.h"
 #include "netplay_session.h"
 #include "netplay_start.h"
@@ -104,7 +105,7 @@ std::atomic<bool> g_tapScreen{false};
 // A tap on the game's own screens is played back as remote presses on channel 1: one press, or
 // D-pad steps toward a cursor position (checked against the game's cursor before each) and then
 // 2 to pick it.
-enum class NavKind { None, Press, File, Players, Cursor };
+enum class NavKind { None, Press, File, Players, Cursor, MapWalk };
 struct Nav {
     NavKind kind = NavKind::None;
     int target = 0;           // the cursor position, or for Press the buttons
@@ -129,7 +130,7 @@ bool CursorStep(Nav& n, uint32_t& button);
 
 
 void StartNav(NavKind kind, int target) {
-    static const char* const kKinds[] = {"none", "press", "file select", "select players", "menu cursor"};
+    static const char* const kKinds[] = {"none", "press", "file select", "select players", "menu cursor", "map walk"};
     RT_LOGF(RT_TAG_RUNTIME, "tap: %s 0x%X\n", kKinds[static_cast<int>(kind)], target);
     g_nav = Nav{};
     g_nav.kind = kind;
@@ -203,6 +204,14 @@ uint32_t NavButtons() {
     Nav& n = g_nav;
     if (n.kind == NavKind::None) {
         return 0;
+    }
+    if (n.kind == NavKind::MapWalk) {
+        bool active = false;
+        const uint32_t buttons = WorldMapNav::Buttons(active);
+        if (!active) {
+            n.kind = NavKind::None;
+        }
+        return buttons;
     }
     const int phase = n.reads++ % 8;
     if (phase == 0) {
@@ -803,7 +812,7 @@ bool g_lastWide = true;
 
 // Cursor rows. Video: 0 tabs, 1 resolution, 2 match screen, 3 FPS, 4 OK. Keybinds: 0 tabs,
 // 1-12 the controls (two columns of six), 13 Reset Defaults, 14 OK.
-constexpr int kVideoOk = 5;
+constexpr int kVideoOk = 6;
 constexpr int kKeyRows = 6;
 constexpr int kKeyReset = 1 + Keybinds::kActionCount, kKeyOk = kKeyReset + 1;
 
@@ -935,29 +944,34 @@ void DrawVideoTab(const Canvas& c) {
     const bool match = scale <= 0.0f;
     const std::vector<VideoChoice> choices = VideoChoices();
     const VideoChoice shown = choices[CurrentChoice(choices)];
-    Text(c, "Resolution", -300, 112, 26, 0, match ? 0xA0A0A0FFu : 0xFFFFFFFFu);
-    Button(c, ChoiceLabel(shown), 105, 112, 270, g_ui.cursor == 1, !match, g_ui.frame);
-    Arrow(c, -50, 112, false, g_ui.cursor == 1, !match);
-    Arrow(c, 260, 112, true, g_ui.cursor == 1, !match);
+    // Five rows, 50 apart, between the tabs and the hint line.
+    constexpr float kRowH = 42.0f;
+    Text(c, "Resolution", -300, 118, 26, 0, match ? 0xA0A0A0FFu : 0xFFFFFFFFu);
+    Button(c, ChoiceLabel(shown), 105, 118, 270, g_ui.cursor == 1, !match, g_ui.frame, 30.0f, kRowH);
+    Arrow(c, -50, 118, false, g_ui.cursor == 1, !match);
+    Arrow(c, 260, 118, true, g_ui.cursor == 1, !match);
     if (!match) {
-        AddHitEvent(-50, 112, 54, 56, 1, kEvLeft);
-        AddHitEvent(260, 112, 54, 56, 1, kEvRight);
-        AddHitEvent(105, 112, 276, 56, 1, kEvRight);
+        AddHitEvent(-50, 118, 54, 48, 1, kEvLeft);
+        AddHitEvent(260, 118, 54, 48, 1, kEvRight);
+        AddHitEvent(105, 118, 276, 48, 1, kEvRight);
     }
-    Button(c, "Match Screen Resolution", 24, 54, 470, g_ui.cursor == 2, true, g_ui.frame);
-    Checkbox(c, -185, 54, match);
-    AddHit(0, 54, 480, 56, 2);
-    Button(c, "Show FPS Counter", 24, -4, 470, g_ui.cursor == 3, true, g_ui.frame);
-    Checkbox(c, -185, -4, settings_overlay::ShowFps());
-    AddHit(0, -4, 480, 56, 3);
-    Button(c, "Spinning Coins", 24, -62, 470, g_ui.cursor == 4, true, g_ui.frame);
-    Checkbox(c, -185, -62, settings_overlay::SpinningCoins());
-    AddHit(0, -62, 480, 56, 4);
+    const auto row = [&](const char* label, float y, int cursor, bool on) {
+        Button(c, label, 24, y, 470, g_ui.cursor == cursor, true, g_ui.frame, 30.0f, kRowH);
+        Checkbox(c, -185, y, on);
+        AddHit(0, y, 480, 48, cursor);
+    };
+    row("Match Screen Resolution", 68, 2, match);
+    row("Show FPS Counter", 18, 3, settings_overlay::ShowFps());
+    row("Frametime Graph", -32, 4, settings_overlay::FrameGraph());
+    row("Spinning Coins", -82, 5, settings_overlay::SpinningCoins());
     const char* hint = match ? "The screen's own resolution, filling the whole screen."
                        : !DisplaySettings::SurfaceWide() ? "Rendered at this many lines, then scaled to the screen."
                        : shown.wide                      ? "Fills the whole screen with a wider view."
                                                          : "16:9, with black bars at the sides.";
-    Text(c, g_ui.cursor == 4 ? "Animated coins and blocks. Off saves a little GPU work." : hint, 0, -116, 21);
+    const char* note = g_ui.cursor == 4 ? "How long each frame took, under the FPS counter."
+                       : g_ui.cursor == 5 ? "Animated coins and blocks. Off saves a little GPU work."
+                                          : hint;
+    Text(c, note, 0, -126, 21);
     Button(c, "OK", 0, -kSettingsHeight / 2 + 43.0f, 232, g_ui.cursor == kVideoOk, true, g_ui.frame);
     AddHit(0, -kSettingsHeight / 2 + 43.0f, 240, 60, kVideoOk);
 }
@@ -1041,6 +1055,9 @@ void HandleSettings(bool left, bool right, bool up, bool down, bool confirm, boo
             settings_overlay::SetShowFps(!settings_overlay::ShowFps());
             g_settingsChanged = true;
         } else if (confirm && cursor == 4) {
+            settings_overlay::SetFrameGraph(!settings_overlay::FrameGraph());
+            g_settingsChanged = true;
+        } else if (confirm && cursor == 5) {
             settings_overlay::SetSpinningCoins(!settings_overlay::SpinningCoins());
             g_settingsChanged = true;
         } else if (confirm && cursor == kVideoOk) {
@@ -1370,6 +1387,10 @@ void TapAt(float lx, float ly, float gx, uint16_t scene, bool title) {
     }
     // Anywhere else is the game's: the cursor leaves the toggle so the game takes the presses.
     g_ui.toggleFocus = false;
+    if (g_nav.kind == NavKind::MapWalk) {
+        WorldMapNav::Cancel();  // a new tap on the map replaces the walk
+        g_nav.kind = NavKind::None;
+    }
     if (g_nav.kind != NavKind::None) {
         return;  // still playing back the last tap
     }
@@ -1408,6 +1429,17 @@ void TapAt(float lx, float ly, float gx, uint16_t scene, bool title) {
         else if (band(right - 160, right - 25, -200, -152)) press = kOne;      // Items (1)
         if (press != 0) {
             StartNav(NavKind::Press, static_cast<int>(press));
+            return;
+        }
+        // A course (or house, castle...): walk there; on the one the player stands on, enter it.
+        const int point = WorldMapNav::PointAtTap(lx, ly);
+        if (point >= 0) {
+            if (WorldMapNav::PlayerOn(point)) {
+                StartNav(NavKind::Press, static_cast<int>(kTwo));
+            } else {
+                StartNav(NavKind::MapWalk, point);
+                WorldMapNav::WalkTo(point);
+            }
         }
         return;
     }
@@ -1463,7 +1495,7 @@ bool TapScreenUp() {
     return g_tapScreen.load(std::memory_order_acquire);
 }
 
-bool TakeSettingsChange(float& renderScale, bool& showFps, int& aspect, bool& spinningCoins) {
+bool TakeSettingsChange(float& renderScale, bool& showFps, int& aspect, bool& spinningCoins, bool& frameGraph) {
     if (!g_settingsChanged.exchange(false)) {
         return false;
     }
@@ -1471,6 +1503,7 @@ bool TakeSettingsChange(float& renderScale, bool& showFps, int& aspect, bool& sp
     showFps = settings_overlay::ShowFps();
     aspect = settings_overlay::Aspect();
     spinningCoins = settings_overlay::SpinningCoins();
+    frameGraph = settings_overlay::FrameGraph();
     return true;
 }
 
@@ -1745,6 +1778,14 @@ void Draw() {
     }
     if (scene == kSceneWorldMap) {
         ApplyMenuLayout();
+        static const bool dumpMap = std::getenv("NSMBW_DUMP_WMAP") != nullptr;
+        static int dumpFrame = 0;
+        if (dumpMap && ++dumpFrame % 600 == 0) {
+            WorldMapNav::Dump();
+        }
+    } else if (g_nav.kind == NavKind::MapWalk) {
+        WorldMapNav::Cancel();
+        g_nav.kind = NavKind::None;
     }
     if (g_menuOpenSettings.exchange(false)) {
         g_ui.settingsFromPause = true;

@@ -504,6 +504,7 @@ static bool handle_aurora(const u8* data, u32& pos, u32 size, bool bigEndian);
 // NSMBW: time spent decoding GX commands (and waiting for the renderer lock first), and draws
 // decoded, for the runtime's NSMBW_LOG_FPS breakdown.
 std::atomic<uint64_t> g_statProcessNanos{0}, g_statLockNanos{0}, g_statDraws{0};
+std::atomic<uint64_t> g_statProcessTotalNanos{0};  // never reset: slow-frame breakdowns take deltas
 thread_local int t_statDepth = 0;  // only the outermost of nested process()/raw draws counts
 // Timed only while the runtime logs frame times (NSMBW_LOG_FPS): two clock reads per draw add up.
 // Read at first use: on Android the runtime sets the variable from a property after startup.
@@ -521,9 +522,10 @@ struct ProcessTimer {
   }
   ~ProcessTimer() {
     if (StatTiming() && --t_statDepth == 0) {
-      g_statProcessNanos.fetch_add(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                                       std::chrono::steady_clock::now() - start)
-                                       .count(),
+      const auto elapsed =
+          std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
+      g_statProcessTotalNanos.fetch_add(elapsed, std::memory_order_relaxed);
+      g_statProcessNanos.fetch_add(elapsed,
                                    std::memory_order_relaxed);
     }
   }
@@ -2645,6 +2647,10 @@ extern std::atomic<uint64_t> g_statCopies, g_statCopyCreates;
 extern "C" void AuroraTakeCopyStats(uint64_t* copies, uint64_t* creates) {
   *copies = g_statCopies.exchange(0, std::memory_order_relaxed);
   *creates = g_statCopyCreates.exchange(0, std::memory_order_relaxed);
+}
+
+extern "C" uint64_t AuroraGxProcessNanosTotal() {
+  return aurora::gx::fifo::g_statProcessTotalNanos.load(std::memory_order_relaxed);
 }
 
 extern "C" void AuroraTakeGxStats(uint64_t* processNanos, uint64_t* lockNanos, uint64_t* draws) {

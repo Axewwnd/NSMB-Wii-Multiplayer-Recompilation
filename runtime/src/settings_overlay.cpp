@@ -115,6 +115,7 @@ int g_displayMode = [] {
 bool g_skipUnreadyPipelines = RuntimeConfigFile::SkipUnreadyPipelines(true);
 bool g_disableCopyFilter = RuntimeConfigFile::DisableCopyFilter(true);
 bool g_showFps = RuntimeConfigFile::ShowFps(false);  // off unless turned on
+bool g_frameGraph = RuntimeConfigFile::FrameGraph(false);
 #if defined(__APPLE__)
 bool g_metalFxSpatialUpscaling = RuntimeConfigFile::MetalFxSpatialUpscaling(false);
 #endif
@@ -1219,10 +1220,58 @@ void DrawGraphicsSettings() {
     ImGui::Text("Graphics API: %s", GraphicsApiDisplayName());
 }
 
+// The last frames' times (the UI's frame is the presented one), for the graph.
+constexpr int kFrameTimeCount = 180;
+float g_frameTimes[kFrameTimeCount] = {};
+int g_frameTimeNext = 0;
+
+void DrawFrameGraph() {
+    float last = g_frameTimes[(g_frameTimeNext + kFrameTimeCount - 1) % kFrameTimeCount];
+    float peak = 0.0f, sum = 0.0f;
+    int samples = 0;
+    for (float t : g_frameTimes) {
+        if (t <= 0.0f) continue;
+        peak = std::max(peak, t);
+        sum += t;
+        ++samples;
+    }
+    ImGui::Text("Frame: %.1f ms", last);
+    ImGui::TextDisabled("avg %.1f  max %.1f", samples > 0 ? sum / samples : 0.0f, peak);
+    const float scale = ImGui::GetFontSize() / 13.0f;
+    const ImVec2 size(kFrameTimeCount * scale, 50.0f * scale);
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    ImGui::Dummy(size);
+    ImDrawList* list = ImGui::GetWindowDrawList();
+    // 0 to 33.3 ms (two 60 Hz frames), more when a frame took longer.
+    const float top = std::max(100.0f / 3.0f, peak * 1.1f);
+    const auto yOf = [&](float ms) { return origin.y + size.y - std::min(ms / top, 1.0f) * size.y; };
+    list->AddRectFilled(origin, ImVec2(origin.x + size.x, origin.y + size.y), IM_COL32(0, 0, 0, 90));
+    for (const float line : {1000.0f / 60.0f, 1000.0f / 30.0f}) {
+        if (line < top) {
+            list->AddLine(ImVec2(origin.x, yOf(line)), ImVec2(origin.x + size.x, yOf(line)), IM_COL32(255, 255, 255, 60));
+        }
+    }
+    const float w = size.x / kFrameTimeCount;
+    for (int i = 0; i < kFrameTimeCount; ++i) {
+        const float t = g_frameTimes[(g_frameTimeNext + i) % kFrameTimeCount];
+        if (t <= 0.0f) continue;
+        const ImU32 color = t < 1000.0f / 55.0f ? IM_COL32(90, 220, 90, 230)
+                            : t < 1000.0f / 28.0f ? IM_COL32(240, 200, 60, 230)
+                                                  : IM_COL32(240, 80, 70, 240);
+        const float x = origin.x + i * w;
+        list->AddRectFilled(ImVec2(x, yOf(t)), ImVec2(x + std::max(w, 1.0f), origin.y + size.y), color);
+    }
+}
+
 void DrawFpsOverlay() {
     AuroraPresentTiming presentTiming{};
     aurora_get_present_timing(&presentTiming);
-    if (!g_showFps) {
+    {
+        const float dt = ImGui::GetIO().DeltaTime;
+        g_frameTimes[g_frameTimeNext] = dt > 0.0f && dt < 1.0f ? dt * 1000.0f : 0.0f;
+        g_frameTimeNext = (g_frameTimeNext + 1) % kFrameTimeCount;
+    }
+    if (!g_showFps && !g_frameGraph) {
         return;
     }
 
@@ -1239,7 +1288,8 @@ void DrawFpsOverlay() {
                                          ImGuiWindowFlags_NoNav |
                                          ImGuiWindowFlags_NoSavedSettings;
     if (ImGui::Begin("FPS Overlay", nullptr, kFlags)) {
-        if (presentTiming.sampleCount == 0) {
+        if (!g_showFps) {
+        } else if (presentTiming.sampleCount == 0) {
             ImGui::TextUnformatted("FPS: --");
         } else {
             // Present timing includes the additional frames produced by
@@ -1253,6 +1303,9 @@ void DrawFpsOverlay() {
                 ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.25f, 1.0f), "Motion: %.1f",
                                    presentTiming.effectiveFramesPerSecond);
             }
+        }
+        if (g_frameGraph) {
+            DrawFrameGraph();
         }
     }
     ImGui::End();
@@ -1684,6 +1737,15 @@ void SetShowFps(bool show) noexcept {
 
 bool ShowFps() noexcept {
     return g_showFps;
+}
+
+void SetFrameGraph(bool show) noexcept {
+    g_frameGraph = show;
+    RuntimeConfigFile::SetFrameGraph(show);
+}
+
+bool FrameGraph() noexcept {
+    return g_frameGraph;
 }
 
 void SetRenderScale(float scale) noexcept {
