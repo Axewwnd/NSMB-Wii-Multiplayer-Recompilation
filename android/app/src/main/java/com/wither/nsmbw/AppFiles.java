@@ -134,6 +134,7 @@ final class AppFiles {
                 + "disable_copy_filter = true\n"
                 + "show_fps = " + settings.showFps() + "\n"
                 + "spinning_coins = " + settings.spinningCoins() + "\n"
+                + "frame_graph = " + settings.frameGraph() + "\n"
                 + "texture_replacements = false\n"
                 + "texture_dumps = false\n"
                 + "\n[audio]\n"

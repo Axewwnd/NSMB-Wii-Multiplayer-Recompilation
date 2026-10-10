@@ -117,6 +117,7 @@ public final class GameActivity extends SDLActivity
                     settings.setShowFps(changed[1] > 0.5f);
                     if (changed.length > 2) settings.setAspectMode(Math.round(changed[2]));
                     if (changed.length > 3) settings.setSpinningCoins(changed[3] > 0.5f);
+                    if (changed.length > 4) settings.setFrameGraph(changed[4] > 0.5f);
                 }
             }
             if (nativeReady && nativeTapScreen()) {

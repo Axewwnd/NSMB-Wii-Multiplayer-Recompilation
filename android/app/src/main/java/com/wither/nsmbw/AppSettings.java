@@ -40,6 +40,9 @@ final class AppSettings {
     boolean spinningCoins() { return prefs.getBoolean("spinning_coins", true); }
     void setSpinningCoins(boolean on) { prefs.edit().putBoolean("spinning_coins", on).commit(); }
 
+    boolean frameGraph() { return prefs.getBoolean("frame_graph", false); }
+    void setFrameGraph(boolean on) { prefs.edit().putBoolean("frame_graph", on).commit(); }
+
     boolean touchControls() { return prefs.getBoolean("touch_controls", true); }
     void setTouchControls(boolean on) { prefs.edit().putBoolean("touch_controls", on).commit(); }
 
