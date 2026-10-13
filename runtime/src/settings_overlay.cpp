@@ -116,6 +116,7 @@ bool g_skipUnreadyPipelines = RuntimeConfigFile::SkipUnreadyPipelines(true);
 bool g_disableCopyFilter = RuntimeConfigFile::DisableCopyFilter(true);
 bool g_showFps = RuntimeConfigFile::ShowFps(false);  // off unless turned on
 bool g_frameGraph = RuntimeConfigFile::FrameGraph(false);
+std::atomic<bool> g_vsync{RuntimeConfigFile::VSync(false)};
 #if defined(__APPLE__)
 bool g_metalFxSpatialUpscaling = RuntimeConfigFile::MetalFxSpatialUpscaling(false);
 #endif
@@ -1652,6 +1653,7 @@ void InitializeRuntimeSettings() noexcept {
     LimitResolutionForFrameRate();
     aurora_set_frame_interpolation_fps(targetFps);
     AuroraSetTexturePatches(RuntimeConfigFile::SpinningCoins(true));
+    aurora_set_vsync(g_vsync.load());
     aurora_set_display_mode(static_cast<AuroraDisplayMode>(g_displayMode));
     g_displayMode = static_cast<int>(aurora_get_display_mode());
     aurora_set_disable_copy_filter(g_disableCopyFilter);
@@ -1737,6 +1739,16 @@ void SetShowFps(bool show) noexcept {
 
 bool ShowFps() noexcept {
     return g_showFps;
+}
+
+void SetVSync(bool enabled) noexcept {
+    g_vsync.store(enabled);
+    aurora_set_vsync(enabled);
+    RuntimeConfigFile::SetVSync(enabled);
+}
+
+bool VSync() noexcept {
+    return g_vsync.load(std::memory_order_relaxed);
 }
 
 void SetFrameGraph(bool show) noexcept {

@@ -900,6 +900,11 @@ std::shared_ptr<PresentationImage> acquire_presentation_image(size_t slot, uint3
   return image;
 }
 
+// NSMBW V-Sync: how long the last presentation waited to acquire a swapchain image. A long wait
+// means the flip queue is backed up (frames queued while V-Sync was switched on); with the game's
+// clock locked to the display that backlog never drains by itself, so the presenter drops a frame.
+std::atomic<int64_t> g_lastAcquireNanos{0};
+
 bool present_presentation_job(const PresentationJob& job) {
   ZoneScoped;
   const auto submissionStarted = PresentClock::now();
@@ -951,6 +956,7 @@ bool present_presentation_job(const PresentationJob& job) {
       auto acquired = acquire_surface_texture();
       acquireDuration =
           std::chrono::duration_cast<std::chrono::nanoseconds>(PresentClock::now() - acquireStarted);
+      g_lastAcquireNanos.store(acquireDuration.count(), std::memory_order_relaxed);
       if (acquired) {
         const wgpu::CommandEncoderDescriptor encoderDescriptor{
             .label = "Presentation encoder",
@@ -1128,6 +1134,20 @@ void presenter_main() noexcept {
       }
       job = std::move(g_presenter.jobs.front());
       g_presenter.jobs.pop_front();
+      // V-Sync only, never for an inserted (interpolated) slot: drop this frame when the swapchain
+      // is backed up, or when it is already late and a newer one waits. A slow scene with no
+      // backlog presents every frame, late or not.
+      if (webgpu::vsync_enabled() && !job.interpolated && job.presentAt != PresentClock::time_point{}) {
+        constexpr auto kBacklog = std::chrono::milliseconds(8);
+        const bool backedUp = g_lastAcquireNanos.exchange(0, std::memory_order_relaxed) >
+                              std::chrono::duration_cast<std::chrono::nanoseconds>(kBacklog).count();
+        const bool lateWithNewer = !g_presenter.jobs.empty() && PresentClock::now() - job.presentAt > kBacklog;
+        if (backedUp || lateWithNewer) {
+          lock.unlock();
+          g_presenter.cv.notify_all();  // wait_for_presenter_idle may be waiting for the queue to empty
+          continue;
+        }
+      }
       g_presenter.presenting = true;
     }
     g_presenter.cv.notify_all();
@@ -1429,7 +1449,7 @@ bool begin_frame_impl(bool pumpEvents, ImGuiFramePolicy imguiPolicy, bool* imgui
   const bool surfaceReconfigurePending =
       g_surfaceReconfigurePending.load(std::memory_order_acquire);
   const bool surfaceMutationRequired =
-      surfaceReconfigurePending || !window::is_presentable() || !g_surface ||
+      surfaceReconfigurePending || webgpu::vsync_change_pending() || !window::is_presentable() || !g_surface ||
       window::native_resize_pending() ||
       !window::native_window_size_matches(
           webgpu::g_graphicsConfig.surfaceConfiguration.width,
@@ -1467,6 +1487,11 @@ bool begin_frame_impl(bool pumpEvents, ImGuiFramePolicy imguiPolicy, bool* imgui
         !window::native_window_size_matches(webgpu::g_graphicsConfig.surfaceConfiguration.width,
                                             webgpu::g_graphicsConfig.surfaceConfiguration.height)) {
       window::sync_frame_buffer_size();
+    }
+    // A V-Sync change reconfigures the swapchain at this same ordered frame boundary.
+    if (webgpu::take_vsync_change()) {
+      const auto size = window::get_window_size();
+      webgpu::resize_swapchain(size.fb_width, size.fb_height, size.native_fb_width, size.native_fb_height, true);
     }
   } else if (window::is_paused()) {
     return false;
@@ -2042,6 +2067,8 @@ void aurora_get_present_timing(AuroraPresentTiming* timing) {
     *timing = aurora::snapshot_present_timing();
   }
 }
+void aurora_set_vsync(bool enabled) { aurora::webgpu::request_vsync(enabled); }
+bool aurora_get_vsync() { return aurora::webgpu::vsync_enabled(); }
 void aurora_set_frame_interpolation_fps(uint32_t targetFps) {
 #ifdef AURORA_ENABLE_GX
   aurora::gx::set_frame_interpolation_fps(targetFps);

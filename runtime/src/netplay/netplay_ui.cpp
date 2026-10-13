@@ -812,7 +812,15 @@ bool g_lastWide = true;
 
 // Cursor rows. Video: 0 tabs, 1 resolution, 2 match screen, 3 FPS, 4 OK. Keybinds: 0 tabs,
 // 1-12 the controls (two columns of six), 13 Reset Defaults, 14 OK.
+// V-Sync is a Windows row: the Android app owns [video] in Config.toml, and phones present through
+// Mailbox (no tearing) anyway.
+#if defined(_WIN32)
+constexpr bool kVSyncRow = true;
+constexpr int kVideoOk = 7;
+#else
+constexpr bool kVSyncRow = false;
 constexpr int kVideoOk = 6;
+#endif
 constexpr int kKeyRows = 6;
 constexpr int kKeyReset = 1 + Keybinds::kActionCount, kKeyOk = kKeyReset + 1;
 
@@ -944,34 +952,40 @@ void DrawVideoTab(const Canvas& c) {
     const bool match = scale <= 0.0f;
     const std::vector<VideoChoice> choices = VideoChoices();
     const VideoChoice shown = choices[CurrentChoice(choices)];
-    // Five rows, 50 apart, between the tabs and the hint line.
-    constexpr float kRowH = 42.0f;
-    Text(c, "Resolution", -300, 118, 26, 0, match ? 0xA0A0A0FFu : 0xFFFFFFFFu);
-    Button(c, ChoiceLabel(shown), 105, 118, 270, g_ui.cursor == 1, !match, g_ui.frame, 30.0f, kRowH);
-    Arrow(c, -50, 118, false, g_ui.cursor == 1, !match);
-    Arrow(c, 260, 118, true, g_ui.cursor == 1, !match);
+    // Five or six rows between the tabs and the hint line.
+    const float kRowH = kVSyncRow ? 37.0f : 42.0f;
+    const float step = kVSyncRow ? 43.0f : 50.0f;
+    const float top = kVSyncRow ? 123.0f : 118.0f;
+    Text(c, "Resolution", -300, top, 26, 0, match ? 0xA0A0A0FFu : 0xFFFFFFFFu);
+    Button(c, ChoiceLabel(shown), 105, top, 270, g_ui.cursor == 1, !match, g_ui.frame, 30.0f, kRowH);
+    Arrow(c, -50, top, false, g_ui.cursor == 1, !match);
+    Arrow(c, 260, top, true, g_ui.cursor == 1, !match);
     if (!match) {
-        AddHitEvent(-50, 118, 54, 48, 1, kEvLeft);
-        AddHitEvent(260, 118, 54, 48, 1, kEvRight);
-        AddHitEvent(105, 118, 276, 48, 1, kEvRight);
+        AddHitEvent(-50, top, 54, step - 2, 1, kEvLeft);
+        AddHitEvent(260, top, 54, step - 2, 1, kEvRight);
+        AddHitEvent(105, top, 276, step - 2, 1, kEvRight);
     }
     const auto row = [&](const char* label, float y, int cursor, bool on) {
         Button(c, label, 24, y, 470, g_ui.cursor == cursor, true, g_ui.frame, 30.0f, kRowH);
         Checkbox(c, -185, y, on);
-        AddHit(0, y, 480, 48, cursor);
+        AddHit(0, y, 480, step - 2, cursor);
     };
-    row("Match Screen Resolution", 68, 2, match);
-    row("Show FPS Counter", 18, 3, settings_overlay::ShowFps());
-    row("Frametime Graph", -32, 4, settings_overlay::FrameGraph());
-    row("Spinning Coins", -82, 5, settings_overlay::SpinningCoins());
+    row("Match Screen Resolution", top - step, 2, match);
+    row("Show FPS Counter", top - 2 * step, 3, settings_overlay::ShowFps());
+    row("Frametime Graph", top - 3 * step, 4, settings_overlay::FrameGraph());
+    row("Spinning Coins", top - 4 * step, 5, settings_overlay::SpinningCoins());
+    if (kVSyncRow) {
+        row("V-Sync", top - 5 * step, 6, settings_overlay::VSync());
+    }
     const char* hint = match ? "The screen's own resolution, filling the whole screen."
                        : !DisplaySettings::SurfaceWide() ? "Rendered at this many lines, then scaled to the screen."
                        : shown.wide                      ? "Fills the whole screen with a wider view."
                                                          : "16:9, with black bars at the sides.";
     const char* note = g_ui.cursor == 4 ? "How long each frame took, under the FPS counter."
                        : g_ui.cursor == 5 ? "Animated coins and blocks. Off saves a little GPU work."
+                       : g_ui.cursor == 6 ? "No tearing: frames wait for the display, the game keeps its pace."
                                           : hint;
-    Text(c, note, 0, -126, 21);
+    Text(c, note, 0, kVSyncRow ? -133 : -126, 21);
     Button(c, "OK", 0, -kSettingsHeight / 2 + 43.0f, 232, g_ui.cursor == kVideoOk, true, g_ui.frame);
     AddHit(0, -kSettingsHeight / 2 + 43.0f, 240, 60, kVideoOk);
 }
@@ -1057,6 +1071,8 @@ void HandleSettings(bool left, bool right, bool up, bool down, bool confirm, boo
         } else if (confirm && cursor == 4) {
             settings_overlay::SetFrameGraph(!settings_overlay::FrameGraph());
             g_settingsChanged = true;
+        } else if (confirm && cursor == 6 && kVSyncRow) {
+            settings_overlay::SetVSync(!settings_overlay::VSync());
         } else if (confirm && cursor == 5) {
             settings_overlay::SetSpinningCoins(!settings_overlay::SpinningCoins());
             g_settingsChanged = true;

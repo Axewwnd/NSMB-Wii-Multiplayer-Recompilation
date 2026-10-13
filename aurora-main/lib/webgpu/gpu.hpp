@@ -78,6 +78,12 @@ void shutdown();
 void fail_if_device_lost() noexcept;
 void release_surface() noexcept;
 bool refresh_surface(bool recreate = true);
+// NSMBW: V-Sync (Fifo) on or off; the change is applied by take_vsync_change at a frame boundary.
+void request_vsync(bool enabled) noexcept;
+bool vsync_enabled() noexcept;
+// Applies a pending V-Sync change to the surface configuration; true when the swapchain must be reconfigured.
+bool take_vsync_change() noexcept;
+bool vsync_change_pending() noexcept;
 void resize_swapchain(uint32_t width, uint32_t height, uint32_t native_width, uint32_t native_height,
                       bool force = false);
 TextureWithSampler create_render_texture(uint32_t width, uint32_t height, bool multisampled);

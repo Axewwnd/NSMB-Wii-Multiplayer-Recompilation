@@ -22,6 +22,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <string>
 #include <cstdint>
 #include <cstdio>
 #include <iostream>
@@ -33,6 +34,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <dwmapi.h>
 #endif
 
 #include <aurora/aurora.h>
@@ -133,6 +135,8 @@ struct ViState {
     uint32_t pendingXfbWidth = 640;
     uint32_t pendingXfbHeight = 480;
     std::chrono::microseconds pendingRetraceInterval{16666us};
+    // V-Sync: the interval the display lock wants for the next retrace (0 = the game's own interval).
+    std::chrono::nanoseconds lockedInterval{0};
     
     // Set by VIFlush(); cleared after commit in AdvanceRetrace
     bool flushArmed = false;
@@ -158,6 +162,103 @@ constexpr uint32_t kViNextFrameBufferHwAddr = 0x8038fb10;  // HorVer.bufAddr (NS
 constexpr uint32_t kViRetraceQueueAddr      = 0x8042a848;  // retraceQueue (NSMBW); // Thread queue for VIWaitForRetrace
 
 // (MKW gated the post-retrace callback on EGG::BaseSystem::sSystem at 0x80386F60; not used for NSMBW.)
+
+
+// ============================================================================
+// V-Sync display lock (Windows)
+// ============================================================================
+// With V-Sync on, presents wait for vblank. A game clock of exactly 60.000 Hz against a display that
+// really runs at 59.94 (or 179.96 / 3) drops or repeats a frame every few seconds, and a full flip
+// queue makes Present block. So the VI clock runs at exactly k display periods per retrace (k = 1 on a
+// 60 Hz display, 3 at 180 Hz), with its phase pulled gently toward the middle of a vblank interval so
+// each frame lands on the same vblank every time. The compositor reports the display's exact period
+// and the time of its last vblank. Displays with no whole fraction near 60 (75, 144 Hz) keep the
+// game's own clock.
+
+struct DisplayLock {
+    bool valid = false;
+    int k = 0;
+    std::chrono::nanoseconds period{0};
+    Clock::time_point vblank{};
+    Clock::time_point lastQuery{};
+    bool logged = false;
+};
+DisplayLock g_displayLock;  // under g_viMutex
+
+void RefreshDisplayLockLocked(Clock::time_point now) {
+    DisplayLock& d = g_displayLock;
+    if (!settings_overlay::VSync()) {
+        d.valid = false;
+        d.logged = false;
+        return;
+    }
+    if (d.lastQuery != Clock::time_point{} && now - d.lastQuery < 250ms) {
+        return;
+    }
+    d.lastQuery = now;
+#if defined(_WIN32)
+    using GetTimingFn = HRESULT(WINAPI*)(HWND, DWM_TIMING_INFO*);
+    static const GetTimingFn getTiming = [] {
+        HMODULE dwm = ::LoadLibraryW(L"dwmapi.dll");
+        return dwm != nullptr ? reinterpret_cast<GetTimingFn>(
+                                    reinterpret_cast<void*>(::GetProcAddress(dwm, "DwmGetCompositionTimingInfo")))
+                              : nullptr;
+    }();
+    DWM_TIMING_INFO info{};
+    info.cbSize = sizeof(info);
+    LARGE_INTEGER frequency{}, qpcNow{};
+    const HRESULT result = getTiming != nullptr ? getTiming(nullptr, &info) : E_NOTIMPL;
+    if (FAILED(result) || info.qpcRefreshPeriod == 0 || !::QueryPerformanceFrequency(&frequency) ||
+        !::QueryPerformanceCounter(&qpcNow)) {
+        if (!d.logged) {
+            d.logged = true;
+            RT_LOGF(RT_TAG_VI, "V-Sync: no display timing (0x%08lX); the game keeps its own clock\n",
+                    static_cast<unsigned long>(result));
+        }
+        d.valid = false;
+        return;
+    }
+    const auto steadyNow = Clock::now();
+    const double nsPerTick = 1e9 / static_cast<double>(frequency.QuadPart);
+    const auto period = std::chrono::nanoseconds(static_cast<int64_t>(info.qpcRefreshPeriod * nsPerTick));
+    const double hz = 1e9 / static_cast<double>(period.count());
+    const int k = static_cast<int>(std::lround(hz / 60.0));
+    d.valid = k >= 1 && k <= 8 && std::fabs(hz / k - 60.0) < 60.0 * 0.02;
+    d.k = k;
+    d.period = period;
+    d.vblank = steadyNow - std::chrono::nanoseconds(static_cast<int64_t>(
+                               static_cast<double>(qpcNow.QuadPart - static_cast<LONGLONG>(info.qpcVBlank)) * nsPerTick));
+    if (!d.logged) {
+        d.logged = true;
+        RT_LOGF(RT_TAG_VI, "V-Sync: display %.3f Hz, %s\n", hz,
+                d.valid ? (std::string("game clock locked at ") + std::to_string(k) + " refresh(es) per frame").c_str()
+                        : "no whole fraction near 60 Hz; the game keeps its own clock");
+    }
+#else
+    d.valid = false;
+#endif
+}
+
+// The interval to the retrace after `retrace`: k display periods, nudged toward the target phase.
+std::chrono::nanoseconds LockedIntervalAfter(Clock::time_point retrace) {
+    const DisplayLock& d = g_displayLock;
+    if (!d.valid || d.period.count() <= 0) {
+        return std::chrono::nanoseconds(0);
+    }
+    const int64_t period = d.period.count();
+    // Presents go out about 6.5 ms after their retrace (aurora's kNativePresentOffsetNanos): put that
+    // moment halfway between two vblanks, the most room either way.
+    constexpr int64_t kPresentOffset = 6'500'000;
+    int64_t target = (period / 2 - kPresentOffset) % period;
+    if (target < 0) target += period;
+    int64_t phase = (std::chrono::duration_cast<std::chrono::nanoseconds>(retrace - d.vblank).count()) % period;
+    if (phase < 0) phase += period;
+    int64_t error = phase - target;
+    if (error > period / 2) error -= period;
+    if (error < -period / 2) error += period;
+    const int64_t correction = std::clamp<int64_t>(-error / 20, -100'000, 100'000);
+    return std::chrono::nanoseconds(period * d.k + correction);
+}
 
 std::chrono::microseconds IntervalForFormat(uint32_t tvFormat) {
     // NTSC-ish defaults to 60 Hz; PAL uses 50 Hz.
@@ -245,6 +346,14 @@ void WriteGuestStateLocked() {
     } catch (const ::Memory::AccessViolation& e) {
         LogMemoryError(RT_TAG_VI, "WriteGuestStateLocked", e);
     }
+}
+
+// The interval to the next retrace: the display lock's while V-Sync holds one (NTSC only).
+std::chrono::nanoseconds ActiveIntervalLocked() {
+    if (g_vi.lockedInterval.count() > 0 && g_vi.tvFormat != 1) {
+        return g_vi.lockedInterval;
+    }
+    return g_vi.retraceInterval;
 }
 
 uint64_t IntervalTicks(std::chrono::microseconds interval) {
@@ -432,6 +541,8 @@ void AdvanceRetrace(CpuContext* ctx, Clock::time_point retraceStamp, bool servic
         g_vi.currentFrameBuffer = g_vi.nextFrameBuffer;
         currentFb = g_vi.currentFrameBuffer;
         g_vi.lastRetrace = retraceStamp;
+        RefreshDisplayLockLocked(Clock::now());
+        g_vi.lockedInterval = LockedIntervalAfter(retraceStamp);
         retraceValue = g_vi.retraceCount;
         preCb = g_vi.preRetraceCallback;
         postCb = g_vi.postRetraceCallback;
@@ -556,7 +667,7 @@ bool AdvanceDueRetraces(CpuContext* ctx, int maxToProcess, bool serviceAurora)
             if (!g_vi.initialized) {
                 return advancedAny;
             }
-            target = g_vi.lastRetrace + g_vi.retraceInterval;
+            target = g_vi.lastRetrace + ActiveIntervalLocked();
             if (now < target) {
                 return advancedAny;
             }
@@ -580,7 +691,7 @@ void VI_HLE_ForceRetrace(CpuContext* ctx) {
     {
         std::lock_guard<std::mutex> lock(g_viMutex);
         EnsureInitializedLocked();
-        target = g_vi.lastRetrace + g_vi.retraceInterval;
+        target = g_vi.lastRetrace + ActiveIntervalLocked();
     }
     AdvanceRetrace(ctx, target, true);
 }
@@ -635,7 +746,7 @@ void VI_HLE_WaitForNextRetracePoll() {
     {
         std::lock_guard<std::mutex> lock(g_viMutex);
         EnsureInitializedLocked();
-        retraceDeadline = g_vi.lastRetrace + g_vi.retraceInterval;
+        retraceDeadline = g_vi.lastRetrace + ActiveIntervalLocked();
     }
 
     const auto now = Clock::now();
@@ -751,15 +862,14 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
         {
             std::lock_guard<std::mutex> lock(g_viMutex);
             EnsureInitializedLocked();
-            paceDeadline = g_vi.lastRetrace + g_vi.retraceInterval;
+            paceDeadline = g_vi.lastRetrace + ActiveIntervalLocked();
             retraceCount = g_vi.retraceCount;
             baseNanos = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     g_vi.lastRetrace.time_since_epoch())
                     .count());
             intervalNanos = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(g_vi.retraceInterval)
-                    .count());
+                ActiveIntervalLocked().count());
         }
         // Hold the frame to its boundary only when no retrace elapsed during
         // its production. A frame that missed its boundary presents
@@ -1165,13 +1275,13 @@ PPC_NATIVE_OVERRIDE_VOID(801BDEE0, VIGetNextField_HLE_801babac, (CpuContext* ctx
 extern "C" void VIGetCurrentLine_HLE_801bac48(CpuContext* ctx)
 {
     uint32_t height = 480;
-    std::chrono::microseconds interval{16666us};
+    std::chrono::nanoseconds interval{16666us};
     Clock::time_point last;
     {
         std::lock_guard<std::mutex> lock(g_viMutex);
         EnsureInitializedLocked();
         height = g_vi.xfbHeight;
-        interval = g_vi.retraceInterval;
+        interval = ActiveIntervalLocked();
         last = g_vi.lastRetrace;
     }
     auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - last);
@@ -1188,7 +1298,8 @@ extern "C" void VIGetCurrentLine_HLE_801bac48(CpuContext* ctx)
     uint32_t line = 0;
     if (interval.count() > 0 && height > 0) {
         const uint64_t scaled = static_cast<uint64_t>(elapsed.count()) * height;
-        line = static_cast<uint32_t>(std::min<uint64_t>(height - 1, scaled / interval.count()));
+        const uint64_t intervalUs = static_cast<uint64_t>(std::max<int64_t>(1, interval.count() / 1000));
+        line = static_cast<uint32_t>(std::min<uint64_t>(height - 1, scaled / intervalUs));
     }
     ViSetR3(ctx, line);
 }
@@ -1222,12 +1333,12 @@ extern "C" void VIWaitForRetrace_HLE_801b99ec(CpuContext* ctx)
 
         OS__RestoreInterrupts_801a65d4(irqState);
     } else {
-        std::chrono::microseconds interval{16666us};
+        std::chrono::nanoseconds interval{16666us};
         Clock::time_point target;
         {
             std::lock_guard<std::mutex> lock(g_viMutex);
             EnsureInitializedLocked();
-            interval = g_vi.retraceInterval;
+            interval = ActiveIntervalLocked();
             target = g_vi.lastRetrace + interval;
         }
 

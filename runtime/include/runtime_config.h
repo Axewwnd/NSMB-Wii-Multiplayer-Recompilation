@@ -52,6 +52,7 @@ struct RuntimeUserConfig {
     std::optional<bool> showFps;
     std::optional<bool> spinningCoins;  // NSMBW: [video] spinning_coins, animated tiles
     std::optional<bool> frameGraph;     // NSMBW: [video] frame_graph, frame times under the FPS counter
+    std::optional<bool> vsync;          // NSMBW: [video] vsync, presents wait for the display (Windows)
     std::optional<uint32_t> disabledPostProcessingPaths;
     std::optional<float> audioVolume;
     std::optional<float> audioMusicVolume;
@@ -568,6 +569,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.showFps = FindConfigValue<bool>(document, "video", "show_fps");
     config.spinningCoins = FindConfigValue<bool>(document, "video", "spinning_coins");
     config.frameGraph = FindConfigValue<bool>(document, "video", "frame_graph");
+    config.vsync = FindConfigValue<bool>(document, "video", "vsync");
     config.textureReplacements = FindConfigValue<bool>(document, "video", "texture_replacements");
     config.textureDumps = FindConfigValue<bool>(document, "video", "texture_dumps");
     if (auto value = FindConfigUint(document, "video", "disabled_post_processing_paths");
@@ -814,6 +816,15 @@ inline bool FrameGraph(bool fallback = false) {
 inline bool SetFrameGraph(bool value) {
     Mutable().frameGraph = value;
     return WriteSetting("video", "frame_graph", value ? "true" : "false");
+}
+
+inline bool VSync(bool fallback = false) {
+    return Get().vsync.value_or(fallback);
+}
+
+inline bool SetVSync(bool value) {
+    Mutable().vsync = value;
+    return WriteSetting("video", "vsync", value ? "true" : "false");
 }
 
 inline bool SetShowFps(bool value) {

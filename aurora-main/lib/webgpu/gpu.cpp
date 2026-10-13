@@ -215,8 +215,12 @@ RenderTargetSize clamp_frame_buffer_size(uint32_t width, uint32_t height) noexce
   return {budgeted.width, budgeted.height};
 }
 
-// V-Sync is never enabled: the guest drives its own pacing, and blocking in Present() couples the
-// whole machine to the monitor (a 120 FPS target on a 75 Hz display runs in slow motion).
+// NSMBW: V-Sync (Fifo) is a setting, off by default. Off, the guest paces itself and presents never
+// wait (Immediate, else Mailbox). On, the runtime runs the game's VI clock at a whole fraction of the
+// display's refresh (runtime/src/hle/vi.cpp), so presents land one per k vblanks and never queue up.
+std::atomic<bool> g_vsyncEnabled{false};
+std::atomic<int> g_vsyncRequest{-1};
+
 wgpu::PresentMode best_present_mode() {
   const auto supports = [](const wgpu::PresentMode candidate) {
     for (size_t i = 0; i < g_surfaceCapabilities.presentModeCount; ++i) {
@@ -226,6 +230,9 @@ wgpu::PresentMode best_present_mode() {
     }
     return false;
   };
+  if (g_vsyncEnabled.load(std::memory_order_acquire) && supports(wgpu::PresentMode::Fifo)) {
+    return wgpu::PresentMode::Fifo;
+  }
   // Vulkan prefers Mailbox, every other backend Immediate. Under window capture the Vulkan driver
   // cannot flip and Immediate leaks about a megabyte per present until the device is lost.
   const bool preferMailbox = g_backendType == wgpu::BackendType::Vulkan;
@@ -1079,6 +1086,36 @@ bool refresh_surface(bool recreate) {
   if (width != 0 && height != 0) {
     resize_swapchain(width, height, native_width, native_height, true);
   }
+  return true;
+}
+
+void request_vsync(bool enabled) noexcept {
+  if (!g_initialized.load(std::memory_order_acquire)) {
+    g_vsyncEnabled.store(enabled, std::memory_order_release);  // the first configuration picks it up
+    return;
+  }
+  g_vsyncRequest.store(enabled ? 1 : 0, std::memory_order_release);
+}
+
+bool vsync_enabled() noexcept { return g_vsyncEnabled.load(std::memory_order_acquire); }
+
+bool vsync_change_pending() noexcept { return g_vsyncRequest.load(std::memory_order_acquire) >= 0; }
+
+bool take_vsync_change() noexcept {
+  const int request = g_vsyncRequest.exchange(-1, std::memory_order_acq_rel);
+  if (request < 0) {
+    return false;
+  }
+  g_vsyncEnabled.store(request == 1, std::memory_order_release);
+  if (!g_surface || !g_device) {
+    return false;
+  }
+  const auto mode = best_present_mode();
+  if (mode == g_graphicsConfig.surfaceConfiguration.presentMode) {
+    return false;
+  }
+  Log.info("Present mode {} (V-Sync {})", magic_enum::enum_name(mode), request == 1 ? "on" : "off");
+  g_graphicsConfig.surfaceConfiguration.presentMode = mode;
   return true;
 }
 
