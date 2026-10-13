@@ -53,8 +53,10 @@ the progress. See [LAN and Tailscale multiplayer](#lan-and-tailscale-multiplayer
 **Tap the menus.**
 Tap (or click with the mouse on Windows) what you want on the game's menus: the title screen,
 Select a File, Select Players, the LAN menus, the world map's Menu / Select World / View Map /
-Items buttons, the pause and **+** menus and the Save / Don't Save style windows. The on-screen
-controller hides on the main menus and comes back for the game.
+Items buttons, the pause and **+** menus and the Save / Don't Save style windows. On the world
+map, tap a level (or a Toad house, tower or castle) and the player walks there along the paths; tap
+the one the player stands on to play it. The on-screen controller hides on the main menus and comes
+back for the game.
 
 **Touch controls, tilt and shake.**
 An on-screen sideways Wii Remote (D-pad, 1, 2, A, Shake, + and -) with adjustable opacity and
@@ -80,14 +82,14 @@ and so do **Settings** in the world map's **+** menu (under Quick Save) and the 
 right of a level's pause menu.
 **Video:** Match Screen Resolution, the resolution multiplier (greyed out while matching the
 screen; on a wide screen each scale comes as "1x (480p)" with black bars or "1x Ultrawide" filling
-the screen), Show FPS Counter (off by default) and Spinning Coins (animated coins and blocks, on by
-default). **Keybinds:** every keyboard control, each
+the screen), Show FPS Counter (off by default), Frametime Graph (each frame's time, drawn under
+the FPS counter; off by default) and Spinning Coins (animated coins and blocks, on by default). **Keybinds:** every keyboard control, each
 changed by picking it and pressing the new key, with Reset Defaults.
 
 **Settings.**
 On Android, **Settings** on the start menu holds Display (aspect ratio, render resolution, FPS
-counter, graphics compatibility) and Controls; in the game, the phone's Back gesture offers Start
-Menu, Leave LAN Game and Quit. On Windows, press **F10** for the settings bar. Everything you
+counter, frametime graph, spinning coins, graphics compatibility) and Controls; in the game, the
+phone's Back gesture offers Start Menu, Leave LAN Game and Quit. On Windows, press **F10** for the settings bar. Everything you
 change is saved and restored next launch.
 
 **Skip Start Menu.**
@@ -145,9 +147,9 @@ The app's start screen shows these steps until a game is imported, and **Help** 
 Download from the [Releases](https://github.com/WitherBlitz/NSMB-Wii-Multiplayer-Recompilation/releases/latest)
 page:
 
-- **Android:** `NSMBW-0.0.12-android-arm64.apk`. Open it on your phone and allow installing from that
+- **Android:** `NSMBW-0.0.13-android-arm64.apk`. Open it on your phone and allow installing from that
   app when Android asks. Updates install over it and keep your saves and game files.
-- **Windows:** `NSMBW-0.0.12-windows-x64.zip`. Extract it anywhere and run `NSMBW.exe`. Settings
+- **Windows:** `NSMBW-0.0.13-windows-x64.zip`. Extract it anywhere and run `NSMBW.exe`. Settings
   (including where your game files are), saves and caches live in `Documents\MarioWiiSaveData`, so a
   new version, extracted anywhere, carries on where the last one left off. The first start of 0.0.8 or
   later takes over the data of an older version extracted in the same folder (or of the version it
@@ -274,7 +276,7 @@ Open an issue with your device, what you did, and (on Windows) the log from
 `Documents\MarioWiiSaveData\Logs`.
 
 **Is it done?**
-No, this is 0.0.12. It boots and plays on the tested devices, but not every level has been checked,
+No, this is 0.0.13. It boots and plays on the tested devices, but not every level has been checked,
 and rendering, performance and LAN play are still being worked on.
 
 ## AI usage
