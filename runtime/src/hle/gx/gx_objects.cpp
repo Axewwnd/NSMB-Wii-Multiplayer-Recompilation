@@ -548,6 +548,24 @@ GXTexObj* GetHostTexObj(uint32_t addr) {
                 addr, cpu ? cpu->pc : 0u, cpu ? cpu->lr : 0u, cpu ? cpu->ctr : 0u);
         std::fflush(stderr);
         GXTexObj* obj = CreateHostTexObj(addr);
+        // A texture object the game copied with memcpy (nw4r's CopiedMatAccess: NSMBW's ride lifts set
+        // their copied material's wrap mode every frame) never went through GXInitTexObj, so there is
+        // no host twin yet. Build it from the guest struct: a blank one kept a zero width, height and
+        // format, and GXLoadTexObj then sampled the right data as a 1x1 I4 texture (white platforms).
+        const TexObjMeta guest = ExtractTexObjMetaFromGuest(addr);
+        if (IsUsableTexObjMeta(guest)) {
+            if (void* data = GuestToHostPtr(guest.dataAddr)) {
+                if (IsPaletteTexFormat(guest.format)) {
+                    GXInitTexObjCI(obj, data, guest.width, guest.height, static_cast<GXCITexFmt>(guest.format),
+                                   static_cast<GXTexWrapMode>(guest.wrapS & 3u), static_cast<GXTexWrapMode>(guest.wrapT & 3u),
+                                   guest.mipmap ? GX_TRUE : GX_FALSE, guest.tlut);
+                } else {
+                    GXInitTexObj(obj, data, guest.width, guest.height, static_cast<GXTexFmt>(guest.format),
+                                 static_cast<GXTexWrapMode>(guest.wrapS & 3u), static_cast<GXTexWrapMode>(guest.wrapT & 3u),
+                                 guest.mipmap ? GX_TRUE : GX_FALSE);
+                }
+            }
+        }
         MarkHostTexObjConstructed(addr);
         return obj;
     }

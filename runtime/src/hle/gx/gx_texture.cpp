@@ -577,6 +577,13 @@ extern "C" void GX__LoadTexObj_80170f2c(uint32_t oa, uint32_t tid) {
             needsInit = true;
         }
     }
+    // The host twin must describe the same image as the guest struct; one that drifted (built blank
+    // by a wrap/LOD call before any GXInitTexObj) is rebuilt rather than patched with a data pointer.
+    if (!needsInit && obj != nullptr &&
+        (GXGetTexObjWidth(obj) != meta.width || GXGetTexObjHeight(obj) != meta.height ||
+         static_cast<uint32_t>(GXGetTexObjFmt(obj)) != meta.format)) {
+        needsInit = true;
+    }
     bool tlutChanged = false;
     bool textureDataUploaded = false;
     try {
