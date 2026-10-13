@@ -15,6 +15,12 @@ extern "C" void GxNotifyGuestRamDmaWrite(uint32_t addr, uint32_t size);
 #include "runtime_log.h"
 #include "runtime_product.h"
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
@@ -28,6 +34,11 @@ extern "C" void GxNotifyGuestRamDmaWrite(uint32_t addr, uint32_t size);
 #include <iostream>
 #include <fstream>
 #include <mutex>
+#include <atomic>
+#include <chrono>
+#include <memory>
+#include <thread>
+#include <unordered_map>
 #include <sstream>
 #include <utility>
 
@@ -83,6 +94,104 @@ struct FstFileEntry {
 
 // Global State
 static std::vector<DVDFileEntry> g_fileEntries;
+
+// ============================================================================
+// Host read cache
+// ============================================================================
+
+// The game's reads (course and object archives, and the music it streams while playing) run on the
+// one host thread every guest thread shares, so a slow read stalls the frame. Each read used to open
+// the file again, which on a busy PC (antivirus and sync filters, a hard disk) took long enough to
+// drop frames during play. On Windows the whole disc (about 340 MB) is read into memory once, on a
+// background thread at the lowest I/O priority, and reads are then served from it. Phones keep
+// reading from flash, which is fast and has less memory to spare.
+namespace {
+
+using FileBytes = std::shared_ptr<const std::vector<uint8_t>>;
+std::mutex g_readCacheMutex;
+std::unordered_map<fs::path::string_type, FileBytes> g_readCache;
+std::atomic<uint64_t> g_dvdReadNanos{0};
+std::atomic<uint32_t> g_dvdReads{0};
+
+FileBytes CachedFile(const fs::path& path) {
+    std::lock_guard lock(g_readCacheMutex);
+    const auto it = g_readCache.find(path.native());
+    return it != g_readCache.end() ? it->second : nullptr;
+}
+
+bool ReadHostFile(const fs::path& path, uint64_t offset, uint32_t length, std::vector<uint8_t>& destination,
+                  DvdReadContract::HostReadFailure& failure) {
+    const auto start = std::chrono::steady_clock::now();
+    bool ok = false;
+    if (const FileBytes bytes = CachedFile(path)) {
+        failure = DvdReadContract::HostReadFailure::None;
+        if (offset >= bytes->size()) {
+            failure = DvdReadContract::HostReadFailure::BadOffset;
+        } else if (length > bytes->size() - offset) {
+            failure = DvdReadContract::HostReadFailure::ShortRead;
+        } else {
+            destination.assign(bytes->begin() + static_cast<std::ptrdiff_t>(offset),
+                               bytes->begin() + static_cast<std::ptrdiff_t>(offset + length));
+            ok = true;
+        }
+    } else {
+        ok = DvdReadContract::ReadExact(path, offset, length, destination, failure);
+    }
+    g_dvdReadNanos.fetch_add(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                       std::chrono::steady_clock::now() - start)
+                                                       .count()),
+                             std::memory_order_relaxed);
+    g_dvdReads.fetch_add(1, std::memory_order_relaxed);
+    return ok;
+}
+
+void StartReadCachePreload() {
+#if defined(_WIN32)
+    constexpr uint64_t kCacheLimitBytes = 1ull << 30;  // mods can be larger than the disc; stop at 1 GiB
+    std::vector<fs::path> paths;
+    for (const DVDFileEntry& entry : g_fileEntries) {
+        if (!entry.isDirectory && entry.size > 0) {
+            paths.push_back(entry.hostPath);
+        }
+    }
+    std::thread([paths = std::move(paths)] {
+        ::SetThreadPriority(::GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
+        const auto start = std::chrono::steady_clock::now();
+        uint64_t total = 0;
+        size_t files = 0;
+        for (const fs::path& path : paths) {
+            std::error_code ec;
+            const uint64_t size = fs::file_size(path, ec);
+            if (ec || size == 0 || total + size > kCacheLimitBytes || CachedFile(path)) {
+                continue;
+            }
+            std::ifstream file(path, std::ios::binary);
+            auto bytes = std::make_shared<std::vector<uint8_t>>(static_cast<size_t>(size));
+            if (!file.read(reinterpret_cast<char*>(bytes->data()), static_cast<std::streamsize>(size))) {
+                continue;
+            }
+            {
+                std::lock_guard lock(g_readCacheMutex);
+                g_readCache.emplace(path.native(), std::move(bytes));
+            }
+            total += size;
+            ++files;
+        }
+        ::SetThreadPriority(::GetCurrentThread(), THREAD_MODE_BACKGROUND_END);
+        RT_LOG(RT_TAG_DVD) << "read cache: " << files << " file(s), " << (total >> 20) << " MiB in "
+                           << std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::steady_clock::now() - start)
+                                  .count()
+                           << " ms" << std::endl;
+    }).detach();
+#endif
+}
+
+}  // namespace
+
+// Time spent in the game's disc reads since start, and how many (slow-frame breakdowns take deltas).
+uint64_t DvdReadNanosTotal() { return g_dvdReadNanos.load(std::memory_order_relaxed); }
+uint32_t DvdReadCount() { return g_dvdReads.load(std::memory_order_relaxed); }
 static std::map<std::string, int32_t> g_pathToEntry;
 // Maps each published file's disc range back to its runtime entry.
 struct PublishedExtent {
@@ -835,6 +944,8 @@ extern "C" void DVDInit_8015EA1C()
               << (g_fileEntries.size() - vanillaEntryCount) << " overlay registration(s) from "
               << overlays.size() << " root(s)" << std::endl;
 
+    StartReadCachePreload();
+
     // Load FST mapping so real files keep their physical disc extents.
     LoadFstIndex();
     BuildAndPublishRuntimeFst();
@@ -904,7 +1015,7 @@ extern "C" int32_t DVDReadPrio_8015E834(uint32_t fileInfoPtr, uint32_t bufferPtr
 
     std::vector<uint8_t> tempBuf;
     DvdReadContract::HostReadFailure failure;
-    if (!DvdReadContract::ReadExact(entry.hostPath, uOffset, uLength, tempBuf, failure)) {
+    if (!ReadHostFile(entry.hostPath, uOffset, uLength, tempBuf, failure)) {
         return DvdReadFatal(fileInfoPtr, HostPathText(entry.hostPath), offset, uLength,
                             DvdReadContract::Describe(failure));
     }
@@ -971,7 +1082,7 @@ extern "C" int32_t DVD__ReadAbsAsyncPrio_HLE_801628cc(uint32_t cmdBlockPtr,
         } else {
             std::vector<uint8_t> tempBuf;
             DvdReadContract::HostReadFailure failure;
-            if (!DvdReadContract::ReadExact(readInfo.entry->hostPath,
+            if (!ReadHostFile(readInfo.entry->hostPath,
                                             readInfo.fileOffset,
                                             readInfo.readLength,
                                             tempBuf,
@@ -1087,7 +1198,7 @@ extern "C" int32_t DVDLowRead_80166330(uint32_t buffer, uint32_t length, uint32_
 
     std::vector<uint8_t> tempBuf;
     DvdReadContract::HostReadFailure failure;
-    if (!DvdReadContract::ReadExact(readInfo.entry->hostPath,
+    if (!ReadHostFile(readInfo.entry->hostPath,
                                     readInfo.fileOffset,
                                     readInfo.readLength,
                                     tempBuf,

@@ -506,18 +506,22 @@ static bool handle_aurora(const u8* data, u32& pos, u32 size, bool bigEndian);
 std::atomic<uint64_t> g_statProcessNanos{0}, g_statLockNanos{0}, g_statDraws{0};
 std::atomic<uint64_t> g_statProcessTotalNanos{0};  // never reset: slow-frame breakdowns take deltas
 thread_local int t_statDepth = 0;  // only the outermost of nested process()/raw draws counts
-// Timed only while the runtime logs frame times (NSMBW_LOG_FPS): two clock reads per draw add up.
-// Read at first use: on Android the runtime sets the variable from a property after startup.
+// Timed on Windows always (the slow-frame log splits a frame into GX and the rest), elsewhere only
+// while the runtime logs frame times (NSMBW_LOG_FPS): two clock reads per outermost call add up on a
+// phone. Read at first use: on Android the runtime sets the variable from a property after startup.
 static bool StatTiming() {
+#if defined(_WIN32)
+  return true;
+#else
   static const bool on = std::getenv("NSMBW_LOG_FPS") != nullptr;
   return on;
+#endif
 }
 struct ProcessTimer {
   std::chrono::steady_clock::time_point start{};
   ProcessTimer() {
-    if (StatTiming()) {
+    if (StatTiming() && t_statDepth++ == 0) {
       start = std::chrono::steady_clock::now();
-      ++t_statDepth;
     }
   }
   ~ProcessTimer() {

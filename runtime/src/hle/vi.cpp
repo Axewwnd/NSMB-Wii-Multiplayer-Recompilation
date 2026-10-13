@@ -709,6 +709,10 @@ static bool LogFpsEnabled() {
     return on;
 }
 
+// dvd.cpp: time in the game's disc reads since start, and their count.
+uint64_t DvdReadNanosTotal();
+uint32_t DvdReadCount();
+
 void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
     if (s_presentSequenceActive.exchange(true, std::memory_order_acq_rel)) {
         return;
@@ -806,10 +810,17 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
     if (presentedXfb) {
         static Clock::time_point s_lastEnd{}, s_windowStart{};
         static int s_logged = 0;
-        static uint64_t s_lastGx = 0;
+        static uint64_t s_lastGx = 0, s_lastDvd = 0;
+        static uint32_t s_lastDvdReads = 0;
         const uint64_t gxTotal = AuroraGxProcessNanosTotal();
         const double gxMs = (gxTotal - s_lastGx) / 1e6;
         s_lastGx = gxTotal;
+        const uint64_t dvdTotal = DvdReadNanosTotal();
+        const uint32_t dvdReads = DvdReadCount();
+        const double dvdMs = (dvdTotal - s_lastDvd) / 1e6;
+        const uint32_t frameReads = dvdReads - s_lastDvdReads;
+        s_lastDvd = dvdTotal;
+        s_lastDvdReads = dvdReads;
         const Clock::time_point now = Clock::now();
         if (s_lastEnd != Clock::time_point{}) {
             const double frame = ms(now - s_lastEnd);
@@ -821,8 +832,10 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
                 uint32_t sceneWord = 0;
                 Memory::TryRead32(0x80428730u, sceneWord);
                 RT_LOGF(RT_TAG_VI,
-                        "slow frame %.1f ms (scene 0x%03X): game %.2f (gx %.2f), present %.2f, end_frame %.2f, pace %.2f\n",
-                        frame, sceneWord & 0xFFFFu, ms(presentStart - s_lastEnd), gxMs, ms(endFrameStart - presentStart),
+                        "slow frame %.1f ms (scene 0x%03X): game %.2f (gx %.2f, disc %.2f in %u reads), present %.2f, "
+                        "end_frame %.2f, pace %.2f\n",
+                        frame, sceneWord & 0xFFFFu, ms(presentStart - s_lastEnd), gxMs, dvdMs, frameReads,
+                        ms(endFrameStart - presentStart),
                         ms(paceStart - endFrameStart), ms(now - paceStart));
             }
         }

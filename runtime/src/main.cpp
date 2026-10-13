@@ -137,9 +137,36 @@ void ConfigureWindowsFatalDialogBehavior() {
     _CrtSetReportHook(WindowsCrtReportHook);
 }
 
+// A busy PC (browsers, launchers, sync and antivirus tools) delays the game's threads when they wake
+// for a frame, which shows as dropped frames at 60. Run above normal priority, and opt out of
+// Windows' power throttling (EcoQoS), which can slow the process down and coarsen its timers.
+void RaiseWindowsProcessPriority() {
+    if (!::SetPriorityClass(::GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS)) {
+        RT_LOG(RT_TAG_RUNTIME) << "SetPriorityClass failed: " << ::GetLastError() << std::endl;
+    }
+    struct PowerThrottlingState {
+        ULONG Version;
+        ULONG ControlMask;
+        ULONG StateMask;
+    };
+    constexpr int kProcessPowerThrottling = 4;  // PROCESS_INFORMATION_CLASS::ProcessPowerThrottling
+    constexpr ULONG kExecutionSpeed = 0x1, kIgnoreTimerResolution = 0x4;
+    using SetProcessInformationFn = BOOL(WINAPI*)(HANDLE, int, LPVOID, DWORD);
+    const auto setInfo = reinterpret_cast<SetProcessInformationFn>(
+        reinterpret_cast<void*>(::GetProcAddress(::GetModuleHandleW(L"kernel32.dll"), "SetProcessInformation")));
+    if (setInfo != nullptr) {
+        PowerThrottlingState state{1, kExecutionSpeed | kIgnoreTimerResolution, 0};
+        if (!setInfo(::GetCurrentProcess(), kProcessPowerThrottling, &state, sizeof(state))) {
+            state.ControlMask = kExecutionSpeed;  // before Windows 11 the timer flag is unknown
+            setInfo(::GetCurrentProcess(), kProcessPowerThrottling, &state, sizeof(state));
+        }
+    }
+}
+
 class WindowsTimerResolutionGuard {
 public:
     WindowsTimerResolutionGuard() {
+        RaiseWindowsProcessPriority();
         const MMRESULT result = ::timeBeginPeriod(1);
         if (result == TIMERR_NOERROR) {
             armed_ = true;
