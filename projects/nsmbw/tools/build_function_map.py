@@ -169,6 +169,16 @@ def plausible_gap_start(a):
     looks_ascii = all(0x20 <= b <= 0x7E for b in cur.to_bytes(4, "big"))
     return after_terminator and not looks_ascii
 
+def padded_start(a):
+    """Follows zero padding that follows a terminator: nothing can fall through into it."""
+    if word(a - 4) != 0:
+        return False
+    p = a - 4
+    while word(p) == 0 and a - p < 0x40:
+        p -= 4
+    prev = word(p)
+    return prev in TERMINATOR_WORDS or ((prev >> 26) == 18 and (prev & 1) == 0)
+
 # ---------------------------------------------------------------- function starts
 starts = {0x80004050}
 sources = {"entry": 1}
@@ -186,7 +196,10 @@ def add(a, why):
     if why in HEURISTIC and a < 0x80700000 and a not in dol_funcs and not THUNK_RENAMED.match(names.get(a, "")):
         # Data tables (_rom_copy_info, _bss_init_info) and strings live inside .init/.text, so a
         # pointer to them is not a function start.
-        if covered_by_dol_object(a):
+        # Zero padding right after a terminator is a function boundary even where a converted
+        # symbol's length runs over it (dCourseSelectGuide_c::finalizeState_ScrollGuideOnStageWait
+        # has no E1 symbol, and the previous body's length covers it).
+        if covered_by_dol_object(a) and not padded_start(a):
             sources["dropped inside DOL object"] = sources.get("dropped inside DOL object", 0) + 1
             return
         if not plausible_gap_start(a):
