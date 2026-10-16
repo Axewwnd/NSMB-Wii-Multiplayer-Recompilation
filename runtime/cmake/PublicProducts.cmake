@@ -360,8 +360,19 @@ endif()
 # object above checks. AArch64 builds are compiled locally for the host that
 # will run them, so both Linux and Apple Silicon use the compiler's native CPU
 # tuning rather than leaving target-specific performance on the table.
+# NSMBW: MKW_X86_LEVEL=v2 builds the "compat" product for x86 CPUs without AVX2/FMA (older than
+# Haswell / Excavator). Fused multiply-add is then done in software (isa/ppc_soft_fma.h, bit-identical
+# to the instruction), and the CPU check (host_cpu_baseline.cpp) asks only for x86-64-v2. The v3 build
+# hands a v2-only CPU over to the compat build when it sits beside it as "<name>-compat".
+set(MKW_X86_LEVEL "v3" CACHE STRING "x86-64 level of the product: v3, or v2 for the compat build")
+set_property(CACHE MKW_X86_LEVEL PROPERTY STRINGS v3 v2)
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64)$")
-    set(MKW_BASELINE_ARCH_FLAG -march=x86-64-v3)
+    if(MKW_X86_LEVEL STREQUAL "v2")
+        set(MKW_BASELINE_ARCH_FLAG -march=x86-64-v2)
+        target_compile_definitions(mkw_cpu_baseline PRIVATE MKW_X86_LEVEL_V2=1)
+    else()
+        set(MKW_BASELINE_ARCH_FLAG -march=x86-64-v3)
+    endif()
 elseif(MKW_PLATFORM_ANDROID)
     # Cross-compiled, so -mcpu=native would describe the build machine. ARMv8.2-A (LSE atomics,
     # RCpc loads) is the floor of every Android phone since Cortex-A55/A75.

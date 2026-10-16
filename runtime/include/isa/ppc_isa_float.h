@@ -28,6 +28,25 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+
+// x86-64 without the FMA instruction (the x86-64-v2 "compat" build, for CPUs older than Haswell /
+// Excavator): fused multiply-add in software, rounding once exactly as the instruction does, honouring
+// the flush-to-zero / denormals-are-zero modes the non-IEEE mode sets (see ppc_soft_fma.h).
+#if defined(__x86_64__) && !defined(__FMA__)
+#include "ppc_soft_fma.h"
+#define MKW_SOFT_FMA 1
+#else
+#define MKW_SOFT_FMA 0
+#endif
+
+inline double PpcFusedMulAdd(double a, double b, double c)
+{
+#if MKW_SOFT_FMA
+    return PpcSoftFma::Fma(a, b, c, g_mkwHostNiActive);
+#else
+    return std::fma(a, b, c);
+#endif
+}
 #include <limits>
 
 inline uint64_t PpcBitCastToU64Inline(double value)
@@ -427,14 +446,14 @@ inline float PpcAccuratePsMaddLaneInline(float a, float c, float b)
     // explicit float FMA therefore matches Gekko's single rounding point;
     // multiplying and adding separately can differ by an ULP on ordinary
     // vector and matrix workloads.
-    return PpcFlushSingleForNiInline(std::fma(a, c, signedB));
+    return PpcFlushSingleForNiInline(PpcFusedMulAdd(a, c, signedB));
 }
 
 template <bool Subtract>
 inline float PpcAccuratePsMaddLaneNoNiInline(float a, float c, float b)
 {
     const float signedB = Subtract ? -b : b;
-    return std::fma(a, c, signedB);
+    return PpcFusedMulAdd(a, c, signedB);
 }
 
 template <bool Subtract>
@@ -447,7 +466,7 @@ inline double PpcAccurateSingleMaddIntermediateInline(double a, double c, double
     // Recover the direction of that discarded error for those tie cases.
     const double roundedC = PpcForce25BitInline(c);
     const double signedB = Subtract ? -b : b;
-    double result = std::fma(a, roundedC, signedB);
+    double result = PpcFusedMulAdd(a, roundedC, signedB);
     const uint64_t resultBits = PpcBitCastToU64Inline(result);
     constexpr uint64_t kDiscardedMask = 0x000000001FFFFFFFULL;
     constexpr uint64_t kEvenTie = 0x0000000010000000ULL;
@@ -455,7 +474,7 @@ inline double PpcAccurateSingleMaddIntermediateInline(double a, double c, double
     {
         const double aPrime = signedB - result;
         const double bPrime = result + aPrime;
-        const double deltaA = std::fma(a, roundedC, aPrime);
+        const double deltaA = PpcFusedMulAdd(a, roundedC, aPrime);
         const double deltaB = signedB - bPrime;
         const double error = deltaA + deltaB;
         if (error != 0.0)
@@ -480,23 +499,23 @@ inline double PpcFmulsNoNiInline(double a, double c)
 
 inline double PpcFmaddInline(double a, double c, double b)
 {
-    return std::fma(a, c, b);
+    return PpcFusedMulAdd(a, c, b);
 }
 
 inline double PpcFmsubInline(double a, double c, double b)
 {
-    return std::fma(a, c, -b);
+    return PpcFusedMulAdd(a, c, -b);
 }
 
 inline double PpcFnmaddInline(double a, double c, double b)
 {
-    const double result = std::fma(a, c, b);
+    const double result = PpcFusedMulAdd(a, c, b);
     return std::isnan(result) ? result : -result;
 }
 
 inline double PpcFnmsubInline(double a, double c, double b)
 {
-    const double result = std::fma(a, c, -b);
+    const double result = PpcFusedMulAdd(a, c, -b);
     return std::isnan(result) ? result : -result;
 }
 
@@ -606,7 +625,16 @@ inline double PPC_PsMulNoNiInline(double lhs, double rhs)
 // sign, which x86's vfmsub does not do, so the NaN resolver receives the original subtractor.
 inline PpcPairVec PpcFmaddPairInline(PpcPairVec multiplicand, PpcPairVec multiplier, PpcPairVec addend)
 {
-#if defined(__x86_64__)
+#if defined(__x86_64__) && MKW_SOFT_FMA
+    alignas(16) float m[4], n[4], a[4];
+    _mm_store_ps(m, multiplicand);
+    _mm_store_ps(n, multiplier);
+    _mm_store_ps(a, addend);
+    for (int lane = 0; lane < 4; ++lane) {
+        m[lane] = PpcSoftFma::Fmaf(m[lane], n[lane], a[lane], g_mkwHostNiActive);
+    }
+    return _mm_load_ps(m);
+#elif defined(__x86_64__)
     return _mm_fmadd_ps(multiplicand, multiplier, addend);
 #elif defined(__aarch64__)
     const PpcPairVec result = vfma_f32(addend, multiplicand, multiplier);
@@ -618,7 +646,19 @@ inline PpcPairVec PpcFmaddPairInline(PpcPairVec multiplicand, PpcPairVec multipl
 
 inline PpcPairVec PpcFmsubPairInline(PpcPairVec multiplicand, PpcPairVec multiplier, PpcPairVec subtractor)
 {
-#if defined(__x86_64__)
+#if defined(__x86_64__) && MKW_SOFT_FMA
+    alignas(16) float m[4], n[4], c[4];
+    _mm_store_ps(m, multiplicand);
+    _mm_store_ps(n, multiplier);
+    _mm_store_ps(c, subtractor);
+    for (int lane = 0; lane < 4; ++lane) {
+        // vfmsub returns a sole NaN subtractor as it is: negating it first would flip its sign.
+        m[lane] = std::isnan(c[lane]) && !std::isnan(m[lane]) && !std::isnan(n[lane])
+                      ? c[lane] + c[lane]
+                      : PpcSoftFma::Fmaf(m[lane], n[lane], -c[lane], g_mkwHostNiActive);
+    }
+    return _mm_load_ps(m);
+#elif defined(__x86_64__)
     return _mm_fmsub_ps(multiplicand, multiplier, subtractor);
 #elif defined(__aarch64__)
     const PpcPairVec result = vfma_f32(vneg_f32(subtractor), multiplicand, multiplier);
