@@ -107,6 +107,10 @@ inline std::filesystem::path ManagedNandRootPath() {
         {
             std::ifstream in(owner);
             std::getline(in, ownerKey);
+            // Written on Windows the line ends "\r\n": a save folder copied to Linux must still match.
+            while (!ownerKey.empty() && (ownerKey.back() == '\r' || ownerKey.back() == ' ')) {
+                ownerKey.pop_back();
+            }
         }
         if (ownerKey.empty()) {
             std::error_code ec;
