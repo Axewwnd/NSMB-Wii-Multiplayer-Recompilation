@@ -47,6 +47,16 @@ public final class GameActivity extends SDLActivity
     static native boolean nativeTapScreen();
     /** {render scale, show FPS, aspect} after the game's own settings window changed them, else null. */
     static native float[] nativeTakeSettings();
+    /**
+     * The app left the screen (true) or came back (false). Leaving, the game writes a backup Quick Save
+     * of the progress so far (deleted again when the app comes back) and pauses; nativeGamePaused says
+     * when it has (runtime/src/host_suspend.h).
+     */
+    static native void nativeSetBackground(boolean background);
+    static native boolean nativeGamePaused();
+
+    /** How long leaving the app waits for the backup save and the pause, before SDL's own pause. */
+    private static final long SUSPEND_WAIT_MS = 1500;
 
     private WifiManager.MulticastLock multicastLock;
 
@@ -138,6 +148,9 @@ public final class GameActivity extends SDLActivity
     @Override
     protected void onResume() {
         super.onResume();
+        if (nativeReady) {
+            nativeSetBackground(false);  // the game carries on where it stopped
+        }
         menuPoll.removeCallbacks(pollMenu);
         menuPoll.post(pollMenu);
         hideSystemBars();
@@ -148,6 +161,20 @@ public final class GameActivity extends SDLActivity
 
     @Override
     protected void onPause() {
+        if (nativeReady) {
+            // Before SDL's pause stops the game thread: let the game write its backup Quick Save (in
+            // case Android ends the app while it is away) and pause itself. Bounded: a save that takes
+            // longer is simply not published (the NAND only commits closed files).
+            nativeSetBackground(true);
+            final long until = android.os.SystemClock.uptimeMillis() + SUSPEND_WAIT_MS;
+            while (!nativeGamePaused() && android.os.SystemClock.uptimeMillis() < until) {
+                try {
+                    Thread.sleep(10);
+                } catch (InterruptedException e) {
+                    break;
+                }
+            }
+        }
         menuPoll.removeCallbacks(pollMenu);
         if (motion != null) motion.stop();
         if (touch != null) touch.release();
