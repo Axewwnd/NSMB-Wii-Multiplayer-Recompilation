@@ -71,6 +71,23 @@ extern "C" uint32_t SCGetEuRgb60Mode_HLE()
 
 PPC_NATIVE_OVERRIDE(801DD2B0, SCGetEuRgb60Mode_HLE, uint32_t, (), ());
 
+// 0x801DD320 -> SCGetLanguage()
+// The console language (SC_LANG_*: 1 English, 3 French, 4 Spanish; the USA disc has EngUS, FraUS
+// and SpaUS). NSMBW picks its message, layout and Home Button files by it. From the Language setting
+// ([game] language), read once: a change takes effect the next time the game starts, never halfway.
+extern "C" uint32_t SCGetLanguage_HLE()
+{
+    static const uint32_t language = [] {
+        const std::string chosen = RuntimeConfigFile::Language();
+        const uint32_t code = chosen == "es" ? 4u : chosen == "fr" ? 3u : 1u;
+        RT_LOGF(RT_TAG_HLE, "SCGetLanguage -> %u (%s)\n", code, chosen.c_str());
+        return code;
+    }();
+    return language;
+}
+
+PPC_NATIVE_OVERRIDE(801DD320, SCGetLanguage_HLE, uint32_t, (), ());
+
 // Expose the selected emulated NAND identity through the SDK SC APIs.
 
 extern "C" uint32_t SCGetProductArea_HLE()

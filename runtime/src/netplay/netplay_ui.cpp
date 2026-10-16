@@ -55,6 +55,7 @@ constexpr uint16_t kProfileOpeningTitle = 0x2BB;  // EVENT_OPENING_TITLE: only o
 
 enum Event : uint32_t {
     kEvLeft = 1, kEvRight = 2, kEvUp = 4, kEvDown = 8, kEvConfirm = 16, kEvBack = 32,
+    kEvTab0 = 64,  // a tap on a settings tab: kEvTab0 << tab
 };
 
 struct Ui {
@@ -930,7 +931,8 @@ void DrawToggle(const Canvas& c) {
 // the whole screen (the multiplier is greyed out meanwhile). Keybinds: the keyboard's remote.
 constexpr float kScales[] = {0.5f, 0.75f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f};
 std::atomic<bool> g_settingsChanged{false};  // the Android app copies them into its own settings
-int g_settingsTab = 0;                       // 0 Video, 1 Keybinds
+int g_settingsTab = 0;                       // 0 Video, 1 Keybinds, 2 Language
+constexpr int kSettingsTabs = 3;
 float g_lastScale = 1.0f;                    // the multiplier Match Screen Resolution returns to
 bool g_lastWide = true;
 
@@ -1063,12 +1065,37 @@ constexpr float kSettingsHeight = 440.0f, kSettingsWidth = 720.0f;
 
 void DrawSettingsTabs(const Canvas& c) {
     const float y = kSettingsHeight / 2 - 42.0f;
-    const char* names[] = {"Video", "Keybinds"};
-    for (int tab = 0; tab < 2; ++tab) {
-        const float x = tab == 0 ? -125.0f : 125.0f;
-        Button(c, names[tab], x, y, 220, g_ui.cursor == 0 && g_settingsTab == tab, g_settingsTab == tab, g_ui.frame);
-        AddHitEvent(x, y, 228, 60, 0, tab == 0 ? kEvLeft : kEvRight);
+    const char* names[kSettingsTabs] = {"Video", "Keybinds", "Language"};
+    for (int tab = 0; tab < kSettingsTabs; ++tab) {
+        const float x = (tab - 1) * 228.0f;
+        Button(c, names[tab], x, y, 212, g_ui.cursor == 0 && g_settingsTab == tab, g_settingsTab == tab, g_ui.frame);
+        AddHitEvent(x, y, 220, 60, 0, kEvTab0 << tab);
     }
+}
+
+// The Language tab: the USA disc's three languages. The game reads the console language once at
+// boot (SCGetLanguage), so a change shows the next time it starts. Cursor rows: 1-3, then 4 OK.
+struct LanguageChoice {
+    const char* code;
+    const char* name;
+};
+constexpr LanguageChoice kLanguages[] = {{"en", "English"}, {"es", "Español"}, {"fr", "Français"}};
+constexpr int kLanguageOk = 4;
+
+void DrawLanguageTab(const Canvas& c) {
+    static const std::string atBoot = RuntimeConfigFile::Language();
+    const std::string chosen = RuntimeConfigFile::Language();
+    for (int i = 0; i < 3; ++i) {
+        const float y = 100.0f - 58.0f * i;
+        Button(c, kLanguages[i].name, 24, y, 380, g_ui.cursor == 1 + i, true, g_ui.frame, 30.0f, 48.0f);
+        Checkbox(c, -140, y, chosen == kLanguages[i].code);
+        AddHit(0, y, 400, 54, 1 + i);
+    }
+    const char* note = chosen != atBoot ? "Restart the game to play in this language."
+                                        : "The language of the game's text and menus.";
+    Text(c, note, 0, -82, 22, 1, chosen != atBoot ? 0xFFF0B0FFu : 0xFFFFFFFFu);
+    Button(c, "OK", 0, -kSettingsHeight / 2 + 43.0f, 232, g_ui.cursor == kLanguageOk, true, g_ui.frame);
+    AddHit(0, -kSettingsHeight / 2 + 43.0f, 240, 60, kLanguageOk);
 }
 
 void DrawVideoTab(const Canvas& c) {
@@ -1144,8 +1171,10 @@ void DrawSettings(const Canvas& c) {
     DrawSettingsTabs(c);
     if (g_settingsTab == 0) {
         DrawVideoTab(c);
-    } else {
+    } else if (g_settingsTab == 1) {
         DrawKeybindsTab(c);
+    } else {
+        DrawLanguageTab(c);
     }
 }
 
@@ -1167,9 +1196,9 @@ void HandleSettings(bool left, bool right, bool up, bool down, bool confirm, boo
     int& cursor = g_ui.cursor;
     if (cursor == 0) {
         if (left || right) {
-            g_settingsTab = left ? 0 : 1;
+            g_settingsTab = std::clamp(g_settingsTab + (left ? -1 : 1), 0, kSettingsTabs - 1);
         } else if (confirm) {
-            g_settingsTab ^= 1;
+            g_settingsTab = (g_settingsTab + 1) % kSettingsTabs;
         } else if (down) {
             cursor = g_settingsTab == 0 && settings_overlay::RenderScale() <= 0.0f ? 2 : 1;
         } else if (back) {
@@ -1201,6 +1230,17 @@ void HandleSettings(bool left, bool right, bool up, bool down, bool confirm, boo
             settings_overlay::SetSpinningCoins(!settings_overlay::SpinningCoins());
             g_settingsChanged = true;
         } else if (confirm && cursor == kVideoOk) {
+            CloseSettings();
+        }
+        return;
+    }
+    if (g_settingsTab == 2) {
+        if (up) cursor = cursor - 1;
+        if (down) cursor = std::min(kLanguageOk, cursor + 1);
+        if (confirm && cursor >= 1 && cursor <= 3) {
+            RuntimeConfigFile::SetLanguage(kLanguages[cursor - 1].code);
+            g_settingsChanged = true;
+        } else if (confirm && cursor == kLanguageOk) {
             CloseSettings();
         }
         return;
@@ -1395,6 +1435,13 @@ void HandleEvents(const NetplayLobby::Snapshot& lobby) {
     g_ui.events = 0;
     const bool left = ev & kEvLeft, right = ev & kEvRight, up = ev & kEvUp, down = ev & kEvDown;
     const bool confirm = ev & kEvConfirm, back = ev & kEvBack;
+    for (int tab = 0; tab < kSettingsTabs; ++tab) {
+        if ((ev & (kEvTab0 << tab)) != 0 && g_ui.screen == Screen::Settings) {
+            g_settingsTab = tab;  // a tapped tab
+            g_ui.cursor = 0;
+            return;
+        }
+    }
     switch (g_ui.screen) {
     case Screen::Lan:
         if (left || right) g_ui.cursor ^= 1;

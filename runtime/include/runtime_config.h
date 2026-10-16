@@ -53,6 +53,7 @@ struct RuntimeUserConfig {
     std::optional<bool> spinningCoins;  // NSMBW: [video] spinning_coins, animated tiles
     std::optional<bool> frameGraph;     // NSMBW: [video] frame_graph, frame times under the FPS counter
     std::optional<bool> vsync;          // NSMBW: [video] vsync, presents wait for the display (Windows)
+    std::optional<std::string> language;  // NSMBW: [game] language, "en" "es" or "fr" (the USA disc's three)
     std::optional<uint32_t> disabledPostProcessingPaths;
     std::optional<float> audioVolume;
     std::optional<float> audioMusicVolume;
@@ -570,6 +571,10 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.spinningCoins = FindConfigValue<bool>(document, "video", "spinning_coins");
     config.frameGraph = FindConfigValue<bool>(document, "video", "frame_graph");
     config.vsync = FindConfigValue<bool>(document, "video", "vsync");
+    if (auto value = FindConfigValue<std::string>(document, "game", "language");
+        value && (*value == "en" || *value == "es" || *value == "fr")) {
+        config.language = *value;
+    }
     config.textureReplacements = FindConfigValue<bool>(document, "video", "texture_replacements");
     config.textureDumps = FindConfigValue<bool>(document, "video", "texture_dumps");
     if (auto value = FindConfigUint(document, "video", "disabled_post_processing_paths");
@@ -807,6 +812,19 @@ inline bool SpinningCoins(bool fallback = true) {
 inline bool SetSpinningCoins(bool value) {
     Mutable().spinningCoins = value;
     return WriteSetting("video", "spinning_coins", value ? "true" : "false");
+}
+
+// NSMBW: the language the game runs in ("en", "es" or "fr"); read by SCGetLanguage at boot.
+inline std::string Language(std::string fallback = "en") {
+    return Get().language.value_or(std::move(fallback));
+}
+
+inline bool SetLanguage(const std::string& value) {
+    if (value != "en" && value != "es" && value != "fr") {
+        return false;
+    }
+    Mutable().language = value;
+    return WriteSetting("game", "language", FormatString(value));
 }
 
 inline bool FrameGraph(bool fallback = false) {

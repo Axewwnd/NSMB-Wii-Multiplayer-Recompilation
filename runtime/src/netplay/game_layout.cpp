@@ -36,9 +36,27 @@ public:
     std::vector<uint64_t> sheets;  // ImTextureID per sheet
     std::vector<Glyph> glyphs;     // by glyph index
     std::unordered_map<uint16_t, uint16_t> map;  // code -> glyph index
+    // The other languages' copies of this font: each language folder's font carries the letters its
+    // own text needs (the English one has no n with tilde, for one). Asked for letters this one lacks.
+    std::vector<std::shared_ptr<Font>> fallbacks;
 
-    const Glyph* Find(char16_t code) const {
+    // The glyph for a character, and in `owner` the font whose sheets hold it.
+    const Glyph* Find(char16_t code, const Font** owner = nullptr) const {
         const auto it = map.find(static_cast<uint16_t>(code));
+        if (it == map.end()) {
+            for (const auto& other : fallbacks) {
+                const auto found = other->map.find(static_cast<uint16_t>(code));
+                if (found != other->map.end() && found->second < other->glyphs.size()) {
+                    if (owner != nullptr) {
+                        *owner = other.get();
+                    }
+                    return &other->glyphs[found->second];
+                }
+            }
+        }
+        if (owner != nullptr) {
+            *owner = this;
+        }
         const uint16_t index = it != map.end() ? it->second : defaultIndex;
         return index < glyphs.size() ? &glyphs[index] : nullptr;
     }
@@ -366,16 +384,13 @@ std::unordered_map<std::string, std::shared_ptr<Font>> g_fonts;
 } // namespace
 
 // ---------------------------------------------------------------- fonts
-std::shared_ptr<Font> LoadFont(const std::string& name) {
-    {
-        std::lock_guard<std::mutex> lock(g_cacheMutex);
-        if (const auto it = g_fonts.find(name); it != g_fonts.end()) {
-            return it->second;
-        }
-    }
+namespace {
+
+// One language folder's copy of a font (`path` a disc path).
+std::shared_ptr<Font> LoadFontFile(const std::string& path) {
     auto font = std::make_shared<Font>();
     std::vector<uint8_t> data;
-    if (ReadDiscFile("/US/EngUS/Font/" + name, data) && data.size() > 0x30 && BE32(data.data()) == 0x52464E54u) {
+    if (ReadDiscFile(path, data) && data.size() > 0x30 && BE32(data.data()) == 0x52464E54u) {
         const uint16_t headerSize = BE16(&data[12]);
         const uint8_t* finf = &data[headerSize];
         if (BE32(finf) == 0x46494E46u) {  // FINF
@@ -469,6 +484,34 @@ std::shared_ptr<Font> LoadFont(const std::string& name) {
                 cmap = BE32(m + 8);
             }
             font->ok = !font->sheets.empty() && !font->glyphs.empty();
+        }
+    }
+    return font;
+}
+
+} // namespace
+
+// The font from the language folder the game runs in ([game] language, as SCGetLanguage reported it
+// at boot), with the other two languages' copies behind it for letters it lacks.
+std::shared_ptr<Font> LoadFont(const std::string& name) {
+    {
+        std::lock_guard<std::mutex> lock(g_cacheMutex);
+        if (const auto it = g_fonts.find(name); it != g_fonts.end()) {
+            return it->second;
+        }
+    }
+    static const std::string language = RuntimeConfigFile::Language();
+    const char* folders[3] = {"EngUS", "SpaUS", "FraUS"};
+    if (language == "es") {
+        std::swap(folders[0], folders[1]);
+    } else if (language == "fr") {
+        std::swap(folders[0], folders[2]);
+    }
+    std::shared_ptr<Font> font = LoadFontFile(std::string("/US/") + folders[0] + "/Font/" + name);
+    for (int i = 1; i < 3 && font->ok; ++i) {
+        auto other = LoadFontFile(std::string("/US/") + folders[i] + "/Font/" + name);
+        if (other->ok) {
+            font->fallbacks.push_back(std::move(other));
         }
     }
     if (!font->ok) {
@@ -576,18 +619,19 @@ void DrawTextLines(ImDrawList* list, const View& view, const Mtx& m, const Font&
         const int align = alignment == 0 ? posH : alignment - 1;
         float x = blockX + (align == 0 ? 0.0f : align == 1 ? (blockWidth - line.width) / 2 : blockWidth - line.width);
         for (char16_t c : line.text) {
-            const Font::Glyph* g = font.Find(c);
-            if (g == nullptr || g->sheet >= font.sheets.size()) {
+            const Font* owner = &font;
+            const Font::Glyph* g = font.Find(c, &owner);
+            if (g == nullptr || g->sheet >= owner->sheets.size()) {
                 continue;
             }
             const float gx = x + g->left * scaleX;
             const float gw = g->glyphWidth * scaleX;
-            const float gh = font.cellHeight * scaleY;
+            const float gh = owner->cellHeight * scaleY;
             const ImVec2 p[4] = {ToScreen(view, m, gx, y), ToScreen(view, m, gx + gw, y), ToScreen(view, m, gx + gw, y - gh),
                                  ToScreen(view, m, gx, y - gh)};
             const ImVec2 uv[4] = {ImVec2(g->u0, g->v0), ImVec2(g->u1, g->v0), ImVec2(g->u1, g->v1), ImVec2(g->u0, g->v1)};
             const ImU32 col[4] = {topCol, topCol, bottomCol, bottomCol};
-            PushQuad(list, font.sheets[g->sheet], p, uv, col);
+            PushQuad(list, owner->sheets[g->sheet], p, uv, col);
             x += g->charWidth * scaleX + charSpace;
         }
         y -= lineHeight;
