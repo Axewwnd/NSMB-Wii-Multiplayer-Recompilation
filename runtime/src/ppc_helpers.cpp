@@ -1,3 +1,4 @@
+#include "host_suspend.h"
 #include "det_clock.h"
 #include "ppc_runtime.h"
 // ppc_runtime.h re-exports the rest of the ISA package; the CR tier is pulled in
@@ -52,7 +53,8 @@ uint64_t GetTimeBase() {
     const auto elapsed = std::chrono::steady_clock::now() - g_timeBaseStart;
     const auto nanoseconds =
         std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
-    return TimeBaseContract::NanosecondsToTicks(static_cast<uint64_t>(nanoseconds));
+    // NSMBW: time spent paused in the background never happened, as far as the game is concerned.
+    return TimeBaseContract::NanosecondsToTicks(static_cast<uint64_t>(nanoseconds) - HostSuspend::PausedNanoseconds());
 }
 
 constexpr uint32_t kFpscrFx = 1u << 31;

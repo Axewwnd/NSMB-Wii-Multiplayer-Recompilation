@@ -12,6 +12,7 @@
 #include "fiber_manager.h"
 #include "platform/host_platform.h"
 #include "runtime_log.h"
+#include "host_suspend.h"
 #include "guest_profiler.h"
 
 #include <dolphin/gx/GXAurora.h>
@@ -657,6 +658,13 @@ bool AdvanceDueRetraces(CpuContext* ctx, int maxToProcess, bool serviceAurora)
             advancedAny = true;
         }
         return advancedAny;
+    }
+
+    // NSMBW: a paused app (Android in the background) blocks the game here; the retrace clock then
+    // skips the paused time instead of catching up on it.
+    if (const uint64_t pausedNs = HostSuspend::OnRetrace(); pausedNs != 0) {
+        std::lock_guard<std::mutex> lock(g_viMutex);
+        g_vi.lastRetrace += std::chrono::nanoseconds(pausedNs);
     }
 
     for (int catchUpCount = 0; catchUpCount < maxToProcess; ++catchUpCount) {

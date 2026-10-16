@@ -323,6 +323,34 @@ uint32_t PauseWindowObject() {
     return Find(kProfilePauseWindow);
 }
 
+bool PauseWindowShowing() {
+    // The window object lives as long as the course; between pauses it idles in StateID_InitWait
+    // (its panes keep their visible flags, the game just doesn't draw the layout then).
+    static uint32_t idleState = 0;
+    const uint32_t object = Find(kProfilePauseWindow);
+    uint32_t id = 0;
+    if (object == 0 || !Memory::TryRead32(object + kPauseMenuState, id) || id == 0) {
+        return false;
+    }
+    if (idleState == 0) {
+        uint32_t namePtr = 0;
+        std::string name;
+        if (Memory::TryRead32(id + 4, namePtr) && namePtr >= 0x80000000u && namePtr < 0x81800000u) {
+            for (uint32_t n = 0; n < 96; ++n) {
+                uint32_t word = 0;
+                if (!Memory::TryRead32((namePtr + n) & ~3u, word)) break;
+                const char ch = static_cast<char>(word >> (24 - 8 * ((namePtr + n) & 3u)));
+                if (ch == 0) break;
+                name += ch;
+            }
+        }
+        if (name.find("StateID_InitWait") != std::string::npos) {
+            idleState = id;
+        }
+    }
+    return id != idleState;
+}
+
 int CourseMenuCursor() {
     const uint32_t object = Find(kProfileCourseSelectMenu);
     uint32_t cursor = 0;

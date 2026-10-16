@@ -2,6 +2,7 @@
 #if defined(__ANDROID__)
 
 #include "display_settings.h"
+#include "host_suspend.h"
 #include "graphics_info.h"
 #include "runtime_config.h"
 #include "settings_overlay.h"
@@ -134,6 +135,22 @@ JNIEXPORT jfloatArray JNICALL Java_com_wither_nsmbw_GameActivity_nativeTakeSetti
 JNIEXPORT jboolean JNICALL Java_com_wither_nsmbw_GameActivity_nativeTapScreen(JNIEnv*, jclass)
 {
     return NetplayUi::TapScreenUp() ? JNI_TRUE : JNI_FALSE;
+}
+
+// GameActivity.nativeSetBackground: the app left the screen (true) or came back (false). Leaving, the
+// game writes a backup Quick Save and pauses (host_suspend.h); nativeGamePaused says when it has.
+JNIEXPORT void JNICALL Java_com_wither_nsmbw_GameActivity_nativeSetBackground(JNIEnv*, jclass, jboolean background)
+{
+    if (background) {
+        HostSuspend::RequestPause(true);
+    } else {
+        HostSuspend::RequestResume();
+    }
+}
+
+JNIEXPORT jboolean JNICALL Java_com_wither_nsmbw_GameActivity_nativeGamePaused(JNIEnv*, jclass)
+{
+    return HostSuspend::Paused() ? JNI_TRUE : JNI_FALSE;
 }
 
 } // extern "C"

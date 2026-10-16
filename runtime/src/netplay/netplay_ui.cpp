@@ -875,7 +875,8 @@ bool MenuWindowTransform(float& cx, float& cy, float& scale, float& alpha) {
 }
 
 bool PauseWindowTransform(float& cx, float& cy, float& scale, float& alpha) {
-    return WindowTransform(g_pauseLayout, GameMenus::PauseWindowObject(), "W_N_pauseMenu_00", cx, cy, scale,
+    return GameMenus::PauseWindowShowing() &&
+           WindowTransform(g_pauseLayout, GameMenus::PauseWindowObject(), "W_N_pauseMenu_00", cx, cy, scale,
                            alpha);
 }
 
