@@ -75,7 +75,7 @@ struct Ui {
     bool restarting = false;
     uint32_t injectButtons = 0;  // buttons the game is given for a few reads (a Back press)
     int injectReads = 0;
-    bool pauseGearShown = false;  // a level's pause menu is open: the settings gear sits at the top right
+    bool pauseSettingsShown = false;  // a level's pause window is open: Settings sits in it
     bool menuSettingsShown = false;  // the world map's + menu is open: our Settings button is in it
     bool settingsFromPause = false;
 };
@@ -425,19 +425,6 @@ void Gear(const Canvas& c, float x, float y, float r) {
     c.list->AddCircle(centre, r * 0.62f * s, color, 24, r * 0.42f * s);
 }
 
-// The gear over the game's pause menus (the world map's + menu, a level's pause window): at the
-// screen's top right, under the FPS counter.
-constexpr float kPauseGearY = 120.0f;
-float PauseGearX(const GameLayout::View& view) {
-    return view.centerX / view.scale - 52.0f;
-}
-
-void DrawPauseGear(const Canvas& c) {
-    const float x = PauseGearX(c.view);
-    Button(c, "", x, kPauseGearY, kGearW, false, true, g_ui.frame);
-    Gear(c, x, kPauseGearY, 13.0f);
-}
-
 // ---------------------------------------------------------------- the world map's + menu: Settings
 // A fourth button, "Settings", under Quick Save in the world map's + menu. The game's own layout
 // (corseSelectMenu.arc, its panes live in guest memory) is edited every frame to make room: the
@@ -517,6 +504,30 @@ void WalkPanes(uint32_t pane, int depth, const std::function<void(uint32_t)>& vi
     }
 }
 
+// NSMBW_DUMP_PANES=1: log every pane of a menu's layout once (name, position, size, parent), to
+// find the panes a layout edit moves.
+void DumpPanesOnce(uint32_t object, const char* what) {
+    static const bool enabled = std::getenv("NSMBW_DUMP_PANES") != nullptr;
+    static uint32_t dumped = 0;
+    if (!enabled || object == 0 || object == dumped) {
+        return;
+    }
+    const uint32_t root = FindRootPane(object);
+    if (root == 0) {
+        return;
+    }
+    dumped = object;
+    WalkPanes(root, 0, [&](uint32_t pane) {
+        uint32_t parent = 0, flags = 0;
+        Memory::TryRead32(pane + 0xC, parent);
+        Memory::TryRead32(pane + 0xB8, flags);
+        RT_LOGF(RT_TAG_RUNTIME, "%s pane %-22s x %7.1f y %7.1f w %6.1f h %6.1f vis %u parent %s\n", what,
+                LivePaneName(pane).c_str(), Memory::ReadFloat32(pane + 0x2C), Memory::ReadFloat32(pane + 0x30),
+                Memory::ReadFloat32(pane + 0x4C), Memory::ReadFloat32(pane + 0x50), flags & 1u,
+                LivePaneName(parent).c_str());
+    });
+}
+
 bool AttachMenuLayout() {
     const uint32_t object = GameMenus::CourseSelectMenuObject();
     if (object == 0) {
@@ -575,34 +586,110 @@ bool MenuShift(const std::string& name, float& dy) {
     return true;
 }
 
-void ApplyMenuLayout() {
-    if (!AttachMenuLayout()) {
-        return;
-    }
-    const auto& layout = g_menuLayout;
+// Moves the listed panes of a menu's layout by their world-space shift (a pane under a moved parent
+// is compensated, so each ends up where its own shift says) and makes the window panes taller.
+using PaneShift = bool (*)(const std::string&, float&);
+void ApplyLayoutEdit(const MenuLayout& layout, PaneShift shift, std::initializer_list<const char*> grows,
+                     float growBy) {
     const std::function<float(uint32_t)> worldShift = [&](uint32_t pane) -> float {
         const auto name = layout.names.find(pane);
         if (name == layout.names.end()) {
             return 0.0f;
         }
         float dy = 0.0f;
-        if (MenuShift(name->second, dy)) {
+        if (shift(name->second, dy)) {
             return dy;
         }
         return worldShift(layout.panes.at(name->second).parent);
     };
     for (const auto& [name, pane] : layout.panes) {
         float dy = 0.0f;
-        if (MenuShift(name, dy)) {
+        if (shift(name, dy)) {
             Memory::WriteFloat32(pane.addr + 0x30, pane.y + dy - worldShift(pane.parent));
         }
     }
-    for (const char* grows : {"W_corseSelect_01", "P_winbg_01"}) {
-        const auto it = layout.panes.find(grows);
+    for (const char* grow : grows) {
+        const auto it = layout.panes.find(grow);
         if (it != layout.panes.end()) {
-            Memory::WriteFloat32(it->second.addr + 0x50, it->second.h + kMenuGrow);
+            Memory::WriteFloat32(it->second.addr + 0x50, it->second.h + growBy);
         }
     }
+}
+
+void ApplyMenuLayout() {
+    if (AttachMenuLayout()) {
+        ApplyLayoutEdit(g_menuLayout, MenuShift, {"W_corseSelect_01", "P_winbg_01"}, kMenuGrow);
+    }
+}
+
+// ---------------------------------------------------------------- a level's pause window: Settings
+// The same for the pause window (Pausewindow_c, pauseMenu.arc): Settings goes between Continue and
+// Exit Course. The window grows by kPauseGrow units, the title and Continue move up by kPauseRaise,
+// Exit Course down by kPauseLower, and Settings takes the middle at the buttons' own pitch. When the
+// course can't be left yet (Exit Course greyed out, its P_shadowBlack shown), the controller stops on
+// Settings, as the game's own cursor stops on Continue.
+constexpr float kPauseGrow = 70.0f, kPauseRaise = 35.0f, kPauseLower = -35.0f;
+constexpr float kPauseSettingsY = -24.0f;  // window space: one pitch (70) under Continue at 11 + 35
+MenuLayout g_pauseLayout;
+std::atomic<bool> g_pauseFocus{false};  // "Settings" holds the pause window's cursor
+int g_pauseFocusFrom = 0;               // the game's own cursor meanwhile: 0 Continue, 1 Exit Course
+std::atomic<bool> g_pauseOpenSettings{false};
+
+bool AttachPauseLayout() {
+    const uint32_t object = GameMenus::PauseWindowObject();
+    if (object == 0) {
+        g_pauseLayout = MenuLayout{};
+        return false;
+    }
+    if (object == g_pauseLayout.object) {
+        return true;
+    }
+    const uint32_t root = FindRootPane(object);
+    if (root == 0) {
+        return false;
+    }
+    MenuLayout layout;
+    layout.object = object;
+    WalkPanes(root, 0, [&](uint32_t pane) {
+        const std::string name = LivePaneName(pane);
+        uint32_t parent = 0;
+        Memory::TryRead32(pane + 0xC, parent);
+        layout.panes[name] = LivePane{pane, parent, Memory::ReadFloat32(pane + 0x30), Memory::ReadFloat32(pane + 0x50)};
+        layout.names[pane] = name;
+    });
+    if (layout.panes.count("W_N_pauseMenu_00") == 0 || layout.panes.count("P_SBBase_02") == 0) {
+        return false;
+    }
+    RT_LOGF(RT_TAG_RUNTIME, "pause window: %zu panes, adding Settings\n", layout.panes.size());
+    g_pauseLayout = std::move(layout);
+    return true;
+}
+
+bool PauseShift(const std::string& name, float& dy) {
+    static const std::map<std::string, float> kShifts = {
+        {"N_worldText_00", kPauseRaise}, {"N_osusumeText_00", kPauseRaise}, {"N_multiText_00", kPauseRaise},
+        {"P_SBBase_00", kPauseRaise},    {"N_posMulti_UP", kPauseRaise},
+        {"P_SBBase_02", kPauseLower},    {"N_posMulti_Down", kPauseLower},
+    };
+    const auto it = kShifts.find(name);
+    if (it == kShifts.end()) {
+        return false;
+    }
+    dy = it->second;
+    return true;
+}
+
+void ApplyPauseLayout() {
+    if (AttachPauseLayout()) {
+        ApplyLayoutEdit(g_pauseLayout, PauseShift, {"W_N_pauseMenu_00", "P_bg_00"}, kPauseGrow);
+    }
+}
+
+// Exit Course can't be chosen in a course not yet cleared: the game shades it (P_shadowBlack).
+bool PauseExitDisabled() {
+    const auto it = g_pauseLayout.panes.find("P_shadowBlack");
+    uint32_t flags = 0;
+    return it != g_pauseLayout.panes.end() && Memory::TryRead32(it->second.addr + 0xB8, flags) && (flags & 1u) != 0;
 }
 
 // The game's own corner brackets would stay on Quick Save or Title Screen while Settings holds the
@@ -616,7 +703,13 @@ void HideGameCursor(bool hide) {
             uint32_t p = 0;
             if (Memory::TryRead32(object + off, p) && InGuestRam(p) &&
                 std::find(hidden.begin(), hidden.end(), p) == hidden.end() && LivePaneName(p) == "RootPane") {
-                hidden.push_back(p);
+                // Only the cursor's own layouts (the ones with the corner brackets): the object also
+                // points at the layout of the menu it sits on (the pause window's, for one).
+                bool brackets = false;
+                WalkPanes(p, 0, [&](uint32_t pane) { brackets = brackets || LivePaneName(pane) == "N_LU_00"; });
+                if (brackets) {
+                    hidden.push_back(p);
+                }
             }
         }
     }
@@ -744,12 +837,13 @@ bool CursorStep(Nav& n, uint32_t& button) {
 
 // The menu window as the game draws it this frame: centre, scale and opacity from the window pane's
 // global matrix (+0x84) and global alpha (+0xB9), so Settings opens, closes and fades with it.
-bool MenuWindowTransform(float& cx, float& cy, float& scale, float& alpha) {
-    if (g_menuLayout.object == 0 || g_menuLayout.object != GameMenus::CourseSelectMenuObject()) {
+bool WindowTransform(const MenuLayout& layout, uint32_t liveObject, const char* windowPane, float& cx, float& cy,
+                     float& scale, float& alpha) {
+    if (layout.object == 0 || layout.object != liveObject) {
         return false;
     }
-    const auto it = g_menuLayout.panes.find("W_corseSelect_01");
-    if (it == g_menuLayout.panes.end()) {
+    const auto it = layout.panes.find(windowPane);
+    if (it == layout.panes.end()) {
         return false;
     }
     const uint32_t pane = it->second.addr;
@@ -774,9 +868,21 @@ bool MenuWindowTransform(float& cx, float& cy, float& scale, float& alpha) {
     return std::isfinite(scale) && std::isfinite(cx) && std::isfinite(cy) && scale > 0.01f && alpha > 0.0f;
 }
 
-void DrawMenuSettings(ImDrawList* list) {
+bool MenuWindowTransform(float& cx, float& cy, float& scale, float& alpha) {
+    return WindowTransform(g_menuLayout, GameMenus::CourseSelectMenuObject(), "W_corseSelect_01", cx, cy, scale,
+                           alpha);
+}
+
+bool PauseWindowTransform(float& cx, float& cy, float& scale, float& alpha) {
+    return WindowTransform(g_pauseLayout, GameMenus::PauseWindowObject(), "W_N_pauseMenu_00", cx, cy, scale,
+                           alpha);
+}
+
+// Draws a "Settings" button in the game's button style at y (window space) of a menu window.
+void DrawWindowSettings(ImDrawList* list, bool (*transform)(float&, float&, float&, float&), float y,
+                        bool focused) {
     float cx = 0, cy = 0, scale = 1, alpha = 1;
-    if (!MenuWindowTransform(cx, cy, scale, alpha)) {
+    if (!transform(cx, cy, scale, alpha)) {
         return;
     }
     // Draw in a view scaled about the window's centre, the way the window itself is scaled.
@@ -786,8 +892,26 @@ void DrawMenuSettings(ImDrawList* list) {
     view.scale *= scale;
     view.gameScaleX *= scale;
     const Canvas c{list, view, alpha};
-    Button(c, "Settings", 0, kMenuSettingsY, 312, g_menuFocus.load() && g_ui.screen == Screen::None,
-           true, g_ui.frame, 34.0f, 56.0f);
+    Button(c, "Settings", 0, y, 312, focused && g_ui.screen == Screen::None, true, g_ui.frame, 34.0f, 56.0f);
+}
+
+void DrawMenuSettings(ImDrawList* list) {
+    DrawWindowSettings(list, MenuWindowTransform, kMenuSettingsY, g_menuFocus.load());
+}
+
+void DrawPauseSettings(ImDrawList* list) {
+    DrawWindowSettings(list, PauseWindowTransform, kPauseSettingsY, g_pauseFocus.load());
+}
+
+// Which of the pause window's buttons the game's own cursor is on (0 Continue, 1 Exit Course), from
+// where its corner brackets are: above or below Settings. -1 without a cursor.
+int PauseGameCursor() {
+    float cx = 0, cy = 0, scale = 1, alpha = 1;
+    const CursorRect r = GameCursorRect();
+    if (!r.valid || !PauseWindowTransform(cx, cy, scale, alpha)) {
+        return -1;
+    }
+    return (r.y0 + r.y1) / 2 > cy + kPauseSettingsY * scale ? 0 : 1;
 }
 
 void DrawToggle(const Canvas& c) {
@@ -1100,6 +1224,7 @@ void DrawLan(const Canvas& c) {
     Title(c, "LAN", 0, 112, 40);
     Text(c, "Join a room on another device,", 0, 40);
     Text(c, "or create one here.", 0, 5);
+    Text(c, "Tailscale works, but is unstable.", 0, -38, 22, 1, 0xFFF0B0FFu);
     ButtonPair(c, "Join", "Create Room", 322, g_ui.cursor);
     Text(c, "(1) Back", 240, 130, 22, 2);  // back to Couch; tappable
     AddHit(195, 130, 140, 44, -1, true);
@@ -1391,11 +1516,6 @@ void TapAt(float lx, float ly, float gx, uint16_t scene, bool title) {
         PressToggle();
         return;
     }
-    if (g_ui.pauseGearShown && in(PauseGearX(GameLayout::GameView()), kPauseGearY, kGearW + 20, 72)) {
-        g_ui.settingsFromPause = true;
-        Show(Screen::Settings);
-        return;
-    }
     if (g_ui.toggleShown && g_ui.screen == Screen::None && in(kGearX, kGearY, kGearW + 16, 66)) {
         g_ui.toggleFocus = false;
         Show(Screen::Settings);
@@ -1424,6 +1544,21 @@ void TapAt(float lx, float ly, float gx, uint16_t scene, bool title) {
             StartNav(NavKind::Press, static_cast<int>(kOne));  // Back (1)
         } else {
             StartCursorNav(lx, ly);  // one of the game's own buttons
+        }
+        return;
+    }
+    if (scene == kSceneStage && g_ui.pauseSettingsShown) {
+        float cx = 0, cy = 0, scale = 1, alpha = 1;
+        if (PauseWindowTransform(cx, cy, scale, alpha) &&
+            in(cx, cy + kPauseSettingsY * scale, 345 * scale, 62 * scale)) {
+            const int cursor = PauseGameCursor();
+            g_pauseFocus = true;
+            g_pauseFocusFrom = cursor >= 0 ? cursor : g_pauseFocusFrom;
+            g_ui.settingsFromPause = true;
+            Show(Screen::Settings);
+        } else {
+            g_pauseFocus = false;
+            StartCursorNav(lx, ly);  // Continue or Exit Course
         }
         return;
     }
@@ -1788,9 +1923,11 @@ void Draw() {
     static int pauseCheck = 0;
     if (++pauseCheck % 6 == 0) {
         const int kind = GameMenus::PauseMenuKind();
-        g_ui.pauseGearShown = (g_ui.screen == Screen::None || g_ui.settingsFromPause) && scene == kSceneStage &&
-                              kind == 2;
+        g_ui.pauseSettingsShown = scene == kSceneStage && kind == 2;
         g_ui.menuSettingsShown = scene == kSceneWorldMap && kind == 1;
+        if (kind == 2) {
+            DumpPanesOnce(GameMenus::PauseWindowObject(), "pause");
+        }
     }
     if (scene == kSceneWorldMap) {
         ApplyMenuLayout();
@@ -1803,13 +1940,20 @@ void Draw() {
         WorldMapNav::Cancel();
         g_nav.kind = NavKind::None;
     }
-    if (g_menuOpenSettings.exchange(false)) {
+    if (scene == kSceneStage) {
+        ApplyPauseLayout();
+    }
+    if (g_menuOpenSettings.exchange(false) || g_pauseOpenSettings.exchange(false)) {
         g_ui.settingsFromPause = true;
         Show(Screen::Settings);
     }
-    HideGameCursor(g_menuFocus.load() && g_ui.menuSettingsShown && g_ui.screen == Screen::None);
+    HideGameCursor(((g_menuFocus.load() && g_ui.menuSettingsShown) || (g_pauseFocus.load() && g_ui.pauseSettingsShown)) &&
+                   g_ui.screen == Screen::None);
     if (!g_ui.menuSettingsShown) {
         g_menuFocus = false;
+    }
+    if (!g_ui.pauseSettingsShown && !g_ui.settingsFromPause) {
+        g_pauseFocus = false;
     }
     // Touch (the Android app's Tap) and mouse clicks on the menus.
     static int titleCheck = 0;
@@ -1844,9 +1988,9 @@ void Draw() {
             ++g_ui.frame;
             DrawToggle(Canvas{list, GameLayout::GameView(), 1.0f});
         }
-        if (g_ui.pauseGearShown) {
+        if (scene == kSceneStage) {
             ++g_ui.frame;
-            DrawPauseGear(Canvas{list, GameLayout::GameView(), 1.0f});
+            DrawPauseSettings(list);
         }
         if (scene == kSceneWorldMap) {
             ++g_ui.frame;
@@ -1974,6 +2118,49 @@ void FilterGameInput(uint32_t chan, WiiRemoteInput::KpadSample& sample) {
                     g_menuFocus = false;  // the game closes its menu
                 }
                 if (g_menuFocus) {
+                    sample.hold &= ~(kUp | kDown | kLeft | kRight | kTwo | kA);
+                }
+            }
+        }
+
+        // A level's pause window: Settings sits between Continue and Exit Course, the same way.
+        if (g_ui.pauseSettingsShown && !Modal()) {
+            const uint32_t down = upright ? kDown : kLeft, up = upright ? kUp : kRight;
+            if (!g_pauseFocus) {
+                const int cursor = PauseGameCursor();
+                if ((pressed & down) != 0 && cursor == 0) {
+                    g_pauseFocus = true;
+                    g_pauseFocusFrom = 0;
+                    g_ui.heldFromMenu |= down;
+                } else if ((pressed & up) != 0 && cursor == 1) {
+                    g_pauseFocus = true;
+                    g_pauseFocusFrom = 1;
+                    g_ui.heldFromMenu |= up;
+                }
+            } else {
+                if ((pressed & up) != 0) {
+                    g_pauseFocus = false;
+                    g_ui.heldFromMenu |= up;
+                    if (g_pauseFocusFrom == 1) {
+                        g_ui.injectButtons = up;  // the game's cursor: Exit Course -> Continue
+                        g_ui.injectReads = 4;
+                    }
+                } else if ((pressed & down) != 0) {
+                    g_ui.heldFromMenu |= down;
+                    if (!PauseExitDisabled()) {  // otherwise Settings is as far down as it goes
+                        g_pauseFocus = false;
+                        if (g_pauseFocusFrom == 0) {
+                            g_ui.injectButtons = down;  // Continue -> Exit Course
+                            g_ui.injectReads = 4;
+                        }
+                    }
+                } else if ((pressed & (kTwo | kA)) != 0) {
+                    g_ui.heldFromMenu |= pressed & (kTwo | kA);
+                    g_pauseOpenSettings = true;
+                } else if ((pressed & (kOne | kB | kPlus)) != 0) {
+                    g_pauseFocus = false;  // the game closes its window
+                }
+                if (g_pauseFocus) {
                     sample.hold &= ~(kUp | kDown | kLeft | kRight | kTwo | kA);
                 }
             }

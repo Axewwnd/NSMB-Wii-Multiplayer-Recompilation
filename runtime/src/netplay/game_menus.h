@@ -45,6 +45,8 @@ int PauseMenuKind();
 // 3 Title Screen; dCourseSelectMenu_c +0x268), -1 without one.
 uint32_t CourseSelectMenuObject();
 int CourseMenuCursor();
+// A level's pause window object (Pausewindow_c), 0 without one.
+uint32_t PauseWindowObject();
 // The SELECT_CURSOR object (the menus' corner brackets), 0 without one.
 uint32_t SelectCursorObject();
 // NSMBW_DUMP_STATES debugging: the StateIDs held by the listed profiles' objects.

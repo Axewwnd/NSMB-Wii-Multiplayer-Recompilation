@@ -319,6 +319,10 @@ uint32_t CourseSelectMenuObject() {
     return Find(kProfileCourseSelectMenu);
 }
 
+uint32_t PauseWindowObject() {
+    return Find(kProfilePauseWindow);
+}
+
 int CourseMenuCursor() {
     const uint32_t object = Find(kProfileCourseSelectMenu);
     uint32_t cursor = 0;
