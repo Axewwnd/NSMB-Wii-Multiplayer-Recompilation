@@ -17,6 +17,8 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#elif defined(__linux__) && !defined(__ANDROID__)
+#include <unistd.h>
 #endif
 
 #if defined(__ANDROID__)
@@ -60,6 +62,15 @@ constexpr const char* kSaveFile = "title/00010000/534d4e45/data/wiimj2d.sav";
     TerminateProcess(GetCurrentProcess(), 0);
 #elif defined(__ANDROID__)
     AndroidBridge::RestartGame();
+#elif defined(__linux__)
+    // Desktop Linux: the same program again, in this process's place.
+    char exe[4096] = {};
+    const ssize_t length = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    if (length > 0) {
+        char* const argv[] = {exe, nullptr};
+        execv(exe, argv);
+    }
+    RT_LOGF(RT_TAG_RUNTIME, "netplay: could not start the game again\n");
 #endif
     std::_Exit(0);
 }

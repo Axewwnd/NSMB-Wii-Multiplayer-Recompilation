@@ -3,7 +3,10 @@
 #include "runtime_config.h"
 #include "runtime_log.h"
 
+#include <cstdlib>
 #include <fstream>
+#include <optional>
+#include <string>
 
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
@@ -11,6 +14,11 @@
 #endif
 #include <windows.h>
 #include <shobjidl.h>
+#elif defined(__linux__) && !defined(__ANDROID__)
+#include <SDL3/SDL_messagebox.h>
+
+#include <cstdio>
+#include <unistd.h>
 #endif
 
 namespace GameFolder {
@@ -77,6 +85,67 @@ std::wstring Widen(const std::string& utf8) {
     MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), static_cast<int>(utf8.size()), wide.data(), length);
     return wide;
 }
+#elif defined(__linux__) && !defined(__ANDROID__)
+constexpr const char* kTitle = "New Super Mario Bros. Wii";
+
+constexpr const char* kSteps =
+    "This port runs your own copy of New Super Mario Bros. Wii (USA, SMNE01, revision 1). "
+    "Extract it once with Dolphin:\n\n"
+    "1. Open Dolphin and find New Super Mario Bros. Wii in the game list.\n"
+    "2. Right-click it, choose Properties, then the Filesystem tab.\n"
+    "3. Right-click the disc at the top and choose Extract Entire Disc, then pick an empty folder.\n"
+    "4. Click OK here and choose that folder. Keep it: the game reads it every time.\n\n"
+    "(Dolphin shows the revision under Properties > Info. Or put the extracted folder next to this "
+    "program and name it \"game\".)";
+
+fs::path ProgramDirectory() {
+    char exe[4096] = {};
+    const ssize_t length = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+    return length > 0 ? fs::path(std::string(exe, static_cast<size_t>(length))).parent_path() : fs::path{};
+}
+
+// OK / Cancel; true for OK.
+bool AskOkCancel(const std::string& message) {
+    const SDL_MessageBoxButtonData buttons[] = {
+        {SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT, 0, "Cancel"},
+        {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, 1, "OK"},
+    };
+    const SDL_MessageBoxData data = {SDL_MESSAGEBOX_INFORMATION, nullptr, kTitle, message.c_str(), 2, buttons, nullptr};
+    int pressed = 0;
+    return SDL_ShowMessageBox(&data, &pressed) && pressed == 1;
+}
+
+// The desktop's folder picker (zenity on GNOME and most others, kdialog on KDE); empty when cancelled,
+// nullopt when neither is installed.
+std::optional<fs::path> PickFolder() {
+    const char* const commands[] = {
+        "zenity --file-selection --directory "
+        "--title='Choose the folder Dolphin extracted New Super Mario Bros. Wii to' 2>/dev/null",
+        "kdialog --getexistingdirectory \"$HOME\" "
+        "--title 'Choose the folder Dolphin extracted New Super Mario Bros. Wii to' 2>/dev/null",
+    };
+    for (const char* command : commands) {
+        const std::string tool(command, std::string(command).find(' '));
+        if (std::system(("command -v " + tool + " >/dev/null 2>&1").c_str()) != 0) {
+            continue;
+        }
+        FILE* pipe = popen(command, "r");
+        if (pipe == nullptr) {
+            continue;
+        }
+        std::string output;
+        char buffer[512];
+        while (std::fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+            output += buffer;
+        }
+        pclose(pipe);
+        while (!output.empty() && (output.back() == '\n' || output.back() == '\r')) {
+            output.pop_back();
+        }
+        return fs::path(output);
+    }
+    return std::nullopt;
+}
 #endif
 
 } // namespace
@@ -118,7 +187,7 @@ std::string Problem(const fs::path& root) {
 }
 
 bool EnsureConfigured() {
-#if defined(_WIN32)
+#if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
     // A "game" folder next to the program needs no questions, and wins over the saved folder: every
     // install shares Documents\MarioWiiSaveData, so this is how two installs play two games (say the
     // original and a mod), each with its own saves (nand_path.h keeps saves per game).
@@ -153,6 +222,39 @@ bool EnsureConfigured() {
         const std::string problem = Problem(root.empty() ? picked : root);
         if (!problem.empty()) {
             message = Widen(problem) + L"\n\n" + kSteps;
+            continue;
+        }
+        RuntimeConfigFile::SetDvdRoot(root);
+        RT_LOGF(RT_TAG_RUNTIME, "game folder: %s\n", RuntimeConfigFile::PathToUtf8(root).c_str());
+        return true;
+    }
+#elif defined(__linux__) && !defined(__ANDROID__)
+    std::string message = kSteps;
+    if (!configured.empty()) {
+        message = Problem(configured) + "\n\n" + message;
+    }
+    for (;;) {
+        if (!AskOkCancel(message)) {
+            return false;
+        }
+        const std::optional<fs::path> picked = PickFolder();
+        if (!picked) {
+            // No folder picker on this desktop: say where the folder can go instead.
+            const std::string config = RuntimeConfigFile::PathToUtf8(RuntimeConfigFile::ResolveConfigPath());
+            const std::string help =
+                "No folder picker (zenity or kdialog) is installed. Put the extracted game next to this "
+                "program in a folder named \"game\", or write its path into " + config +
+                " under [paths] as dvd_root = '/path/to/the/folder', then start the game again.";
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_INFORMATION, kTitle, help.c_str(), nullptr);
+            return false;
+        }
+        if (picked->empty()) {
+            continue;
+        }
+        const fs::path root = Find(*picked);
+        const std::string problem = Problem(root.empty() ? *picked : root);
+        if (!problem.empty()) {
+            message = problem + "\n\n" + kSteps;
             continue;
         }
         RuntimeConfigFile::SetDvdRoot(root);
