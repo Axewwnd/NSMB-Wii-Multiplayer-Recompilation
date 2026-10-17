@@ -147,6 +147,19 @@ void Report(const std::unordered_map<uintptr_t, uint32_t>& samples, const std::v
     for (size_t i = 0; i < sorted.size() && i < 60; ++i) {
         RT_LOGF(RT_TAG_RUNTIME, "profile: %5.1f%%  %s\n", 100.0 * sorted[i].second / total, sorted[i].first.c_str());
     }
+    // Every sample inside the exe by its RVA, for naming runtime and aurora code offline (llvm-nm):
+    // the table above files them under the nearest translated function.
+    std::vector<std::pair<uintptr_t, uint32_t>> rvas;
+    for (const auto& [rip, count] : samples) {
+        if (rip >= exeBase && rip < exeEnd) {
+            rvas.emplace_back(rip - exeBase, count);
+        }
+    }
+    std::sort(rvas.begin(), rvas.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+    for (size_t i = 0; i < rvas.size() && i < 1500; ++i) {
+        RT_LOGF(RT_TAG_RUNTIME, "profile rva: %llX %u\n", static_cast<unsigned long long>(rvas[i].first),
+                rvas[i].second);
+    }
 }
 
 void Run(HANDLE thread, double startSeconds, double lengthSeconds) {
