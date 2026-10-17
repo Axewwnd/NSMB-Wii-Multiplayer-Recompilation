@@ -1,6 +1,7 @@
 #include "netplay/game_menus.h"
 
 #include "memory.h"
+#include "runtime_log.h"
 
 #include <algorithm>
 #include <iterator>
@@ -77,6 +78,63 @@ uint32_t Find(uint16_t profile) {
 
 bool HasProfile(uint16_t profile) {
     return Find(profile) != 0;
+}
+
+bool PlayerInSpinnableAir(int player) {
+    // daPyMng_c::m_playerID[player]: the player's fBaseID, also the first word of its object.
+    constexpr uint32_t kPlayerIds = 0x80354E10u;
+    // The player's sStateMgr is at +0x1464; its method's current StateID (method +0x18, +0x1C).
+    constexpr uint32_t kPlayerStateId = 0x1464u + 0x18u + 0x1Cu;
+    // dAcPy_c's and daPlBase_c's StateID_Jump, _Fall, _SitJump, plus JumpDai (springboards),
+    // WallJump (kicked off a wall) and Propel (the propeller suit's flight).
+    static constexpr uint32_t kSpinnable[] = {
+        0x80375C6Cu, 0x80375CACu, 0x80375D6Cu, 0x803761B0u, 0x80376230u,
+        0x8035429Cu, 0x8035431Cu, 0x803542DCu, 0x803544DCu,
+    };
+    uint32_t id = 0;
+    if (player < 0 || player > 3 || !Memory::TryRead32(kPlayerIds + 4u * static_cast<uint32_t>(player), id) ||
+        id == 0) {
+        return false;
+    }
+    uint32_t node = 0;
+    if (!Memory::TryRead32(kTreeRoot, node)) {
+        return false;
+    }
+    for (int guard = 0; node != 0 && guard < 4096; ++guard) {
+        uint32_t owner = 0, ownerId = 0;
+        if (Memory::TryRead32(node + 0x10, owner) && owner != 0 && Memory::TryRead32(owner, ownerId) &&
+            ownerId == id) {
+            uint32_t state = 0;
+            if (!Memory::TryRead32(owner + kPlayerStateId, state)) {
+                return false;
+            }
+            const bool spinnable = std::find(std::begin(kSpinnable), std::end(kSpinnable), state) != std::end(kSpinnable);
+            static const bool log = std::getenv("NSMBW_SMART_SPIN_LOG") != nullptr;
+            if (log) {
+                RT_LOGF(RT_TAG_RUNTIME, "smart spin: player %d state %08x -> %s\n", player, state,
+                        spinnable ? "spin" : "jump");
+            }
+            return spinnable;
+        }
+        uint32_t child = 0;
+        Memory::TryRead32(node + 4, child);
+        if (child != 0) {
+            node = child;
+            continue;
+        }
+        while (node != 0) {
+            uint32_t next = 0;
+            Memory::TryRead32(node + 0xC, next);
+            if (next != 0) {
+                node = next;
+                break;
+            }
+            uint32_t parent = 0;
+            Memory::TryRead32(node, parent);
+            node = parent;
+        }
+    }
+    return false;
 }
 
 std::vector<uint16_t> Profiles() {

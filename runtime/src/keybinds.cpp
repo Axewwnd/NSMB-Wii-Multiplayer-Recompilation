@@ -5,7 +5,9 @@
 #include <SDL3/SDL_keyboard.h>
 #include <SDL3/SDL_scancode.h>
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <mutex>
 #include <vector>
 
@@ -42,6 +44,7 @@ std::array<std::vector<SDL_Scancode>, kActionCount> g_codes;
 int g_capturing = -1;
 std::vector<bool> g_heldAtCapture;  // keys already down when the capture began
 bool g_suppress = false;            // a capture just ended: ignore the keyboard until all keys are up
+std::atomic<int> g_smartSpin{-1};   // Space Smart Spin QoL: -1 until read from Config.toml
 
 std::vector<SDL_Scancode> Parse(const std::string& text) {
     std::vector<SDL_Scancode> codes;
@@ -118,6 +121,10 @@ std::string KeyLabel(int action) {
 }
 
 bool Held(int action) {
+    return HeldIgnoring(action, SDL_SCANCODE_UNKNOWN);
+}
+
+bool HeldIgnoring(int action, int scancode) {
     std::lock_guard<std::mutex> lock(g_mutex);
     LoadLocked();
     if (g_capturing >= 0 || g_suppress || action < 0 || action >= kActionCount) {
@@ -126,11 +133,35 @@ bool Held(int action) {
     int count = 0;
     const bool* keys = SDL_GetKeyboardState(&count);
     for (const SDL_Scancode code : g_codes[action]) {
-        if (keys != nullptr && code < count && keys[code]) {
+        if (code != scancode && keys != nullptr && code < count && keys[code]) {
             return true;
         }
     }
     return false;
+}
+
+bool Bound(int action, int scancode) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    LoadLocked();
+    if (action < 0 || action >= kActionCount) {
+        return false;
+    }
+    const auto& codes = g_codes[action];
+    return std::find(codes.begin(), codes.end(), static_cast<SDL_Scancode>(scancode)) != codes.end();
+}
+
+bool SmartSpin() {
+    int on = g_smartSpin.load(std::memory_order_relaxed);
+    if (on < 0) {
+        on = RuntimeConfigFile::KeyboardBinding("smart_spin") == "false" ? 0 : 1;
+        g_smartSpin.store(on, std::memory_order_relaxed);
+    }
+    return on != 0;
+}
+
+void SetSmartSpin(bool on) {
+    RuntimeConfigFile::SetKeyboardBinding("smart_spin", on ? "true" : "false");
+    g_smartSpin.store(on ? 1 : 0, std::memory_order_relaxed);
 }
 
 void BeginCapture(int action) {

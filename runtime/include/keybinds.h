@@ -29,6 +29,14 @@ const char* ActionName(int action);
 std::string KeyLabel(int action);
 // Any of the action's keys held (false while a key is being captured, or until it is let go).
 bool Held(int action);
+// Held, leaving one key (an SDL scancode) out; and whether that key is one of the action's.
+bool HeldIgnoring(int action, int scancode);
+bool Bound(int action, int scancode);
+
+// Space Smart Spin QoL (on by default): Space, when it is a Jump key, pressed while the player is
+// in the air shakes the remote (a spin) instead of pressing 2. Saved as [keyboard] smart_spin.
+bool SmartSpin();
+void SetSmartSpin(bool on);
 
 // Waits for the next key pressed and binds it to `action` alone; Escape cancels.
 void BeginCapture(int action);

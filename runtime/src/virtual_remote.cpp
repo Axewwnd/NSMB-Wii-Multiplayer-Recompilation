@@ -2,6 +2,8 @@
 
 #include "input_bindings.h"
 #include "keybinds.h"
+#include "netplay/game_menus.h"
+#include "netplay_session.h"
 #include "runtime_log.h"
 
 #include <dolphin/pad.h>
@@ -105,12 +107,28 @@ Intent KeyboardIntent() {
     if (Held(kRight)) intent.buttons |= kScreenRight;
     if (Held(kUp)) intent.buttons |= kScreenUp;
     if (Held(kDown)) intent.buttons |= kScreenDown;
-    if (Held(kJump)) intent.buttons |= kWpadTwo;
+    // Space Smart Spin QoL: a Space press (Space being a Jump key) while the player is jumping or
+    // falling is a shake, a spin, rather than 2; Space then counts as no button until it is let go.
+    // The player's state is looked at once per press, never per frame.
+    static bool spaceWasDown = false, spaceSpins = false;
+    int keyCount = 0;
+    const bool* keys = SDL_GetKeyboardState(&keyCount);
+    const bool spaceDown = keys != nullptr && SDL_SCANCODE_SPACE < keyCount && keys[SDL_SCANCODE_SPACE];
+    if (spaceDown && !spaceWasDown && SmartSpin() && Bound(kJump, SDL_SCANCODE_SPACE)) {
+        const int player = NetplaySession::Active() ? NetplaySession::GetStatus().localSlot : 0;
+        spaceSpins = GameMenus::PlayerInSpinnableAir(player);
+        intent.shake = spaceSpins;
+    }
+    if (!spaceDown) {
+        spaceSpins = false;
+    }
+    spaceWasDown = spaceDown;
+    if (spaceSpins ? HeldIgnoring(kJump, SDL_SCANCODE_SPACE) : Held(kJump)) intent.buttons |= kWpadTwo;
     if (Held(kRun)) intent.buttons |= kWpadOne;
     if (Held(Keybinds::kA)) intent.buttons |= kWpadA;
     if (Held(kPlus)) intent.buttons |= kWpadPlus;
     if (Held(kMinus)) intent.buttons |= kWpadMinus;
-    intent.shake = Held(kShake);
+    intent.shake = intent.shake || Held(kShake);
     intent.tilt = (Held(kTiltRight) ? 1.0f : 0.0f) - (Held(kTiltLeft) ? 1.0f : 0.0f);
     return intent;
 }
