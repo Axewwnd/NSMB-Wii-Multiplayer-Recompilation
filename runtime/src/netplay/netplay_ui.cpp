@@ -355,14 +355,15 @@ void Cursor(const Canvas& c, float x, float y, float w, float h, int frame) {
 }
 
 // A green-to-yellow button pill like the game's yes/no buttons, w x 53 units, centred on (x, y).
+// fixedScale > 0 draws it at that scale instead of the menus' own (a gentle pulse when selected).
 void Button(const Canvas& c, const std::string& label, float x, float y, float w, bool selected, bool enabled,
-            int frame, float textSize = 30.0f, float h = 53.0f) {
+            int frame, float textSize = 30.0f, float h = 53.0f, float fixedScale = 0.0f) {
     Assets& a = GetAssets();
     GameLayout::DrawParams p;
     p.alpha = c.alpha * (enabled ? 1.0f : 0.55f);
     p.offsetX = x;
     p.offsetY = y + 118.0f;  // the pane is authored at (0, -118)
-    p.scale = selected ? 1.0f + 0.04f * Pulse(frame) : 0.94f;
+    p.scale = fixedScale > 0.0f ? fixedScale : selected ? 1.0f + 0.04f * Pulse(frame) : 0.94f;
     p.paneScale["P_centerBase_00"] = 1.0f;  // authored at 0: it grows in through an animation
     p.paneSize["P_centerBase_00"] = {w, h};
     p.paneSize["W_button_02"] = {w + 5.0f, h + 10.0f};
@@ -680,6 +681,38 @@ bool PauseShift(const std::string& name, float& dy) {
     return true;
 }
 
+// While Settings holds the cursor, the game still thinks its own cursor is on Continue (or Exit
+// Course) and keeps that button grown. Settings borrows its scale (+0x44 x, +0x48 y) and gives it
+// the other button's, so only one button is grown; it gets its own back when Settings lets go.
+float g_pauseOnScale[2] = {0.0f, 0.0f};  // the game's selected-button scale while Settings holds it
+uint32_t g_pauseHeldPane = 0;
+
+void HoldPauseButtonScale(bool hold) {
+    static constexpr const char* kButtons[2] = {"P_SBBase_00", "P_SBBase_02"};
+    const bool live = AttachPauseLayout();
+    if (!hold || !live) {
+        if (g_pauseHeldPane != 0 && live) {
+            Memory::WriteFloat32(g_pauseHeldPane + 0x44, g_pauseOnScale[0]);
+            Memory::WriteFloat32(g_pauseHeldPane + 0x48, g_pauseOnScale[1]);
+        }
+        g_pauseHeldPane = 0;
+        g_pauseOnScale[0] = g_pauseOnScale[1] = 0.0f;
+        return;
+    }
+    const auto held = g_pauseLayout.panes.find(kButtons[g_pauseFocusFrom == 1 ? 1 : 0]);
+    const auto other = g_pauseLayout.panes.find(kButtons[g_pauseFocusFrom == 1 ? 0 : 1]);
+    if (held == g_pauseLayout.panes.end() || other == g_pauseLayout.panes.end()) {
+        return;
+    }
+    if (g_pauseHeldPane != held->second.addr) {
+        g_pauseHeldPane = held->second.addr;
+        g_pauseOnScale[0] = Memory::ReadFloat32(g_pauseHeldPane + 0x44);
+        g_pauseOnScale[1] = Memory::ReadFloat32(g_pauseHeldPane + 0x48);
+    }
+    Memory::WriteFloat32(g_pauseHeldPane + 0x44, Memory::ReadFloat32(other->second.addr + 0x44));
+    Memory::WriteFloat32(g_pauseHeldPane + 0x48, Memory::ReadFloat32(other->second.addr + 0x48));
+}
+
 void ApplyPauseLayout() {
     if (AttachPauseLayout()) {
         ApplyLayoutEdit(g_pauseLayout, PauseShift, {"W_N_pauseMenu_00", "P_bg_00"}, kPauseGrow);
@@ -880,9 +913,18 @@ bool PauseWindowTransform(float& cx, float& cy, float& scale, float& alpha) {
                            alpha);
 }
 
-// Draws a "Settings" button in the game's button style at y (window space) of a menu window.
+// Draws a "Settings" button in the game's button style at y (window space) of a menu window. With
+// match, it copies the window's own buttons instead: their size (the W_SButton frame, as wide and tall on screen) and
+// their live scale, the selected one's when Settings is focused and the other's when it isn't.
+struct MatchButtons {
+    const MenuLayout* layout;
+    const char* first;
+    const char* second;
+    const float* heldScale;  // nonzero: the selected scale, taken from a game button Settings shrank
+};
+
 void DrawWindowSettings(ImDrawList* list, bool (*transform)(float&, float&, float&, float&), float y,
-                        bool focused) {
+                        bool focused, const MatchButtons* match = nullptr) {
     float cx = 0, cy = 0, scale = 1, alpha = 1;
     if (!transform(cx, cy, scale, alpha)) {
         return;
@@ -894,7 +936,21 @@ void DrawWindowSettings(ImDrawList* list, bool (*transform)(float&, float&, floa
     view.scale *= scale;
     view.gameScaleX *= scale;
     const Canvas c{list, view, alpha};
-    Button(c, "Settings", 0, y, 312, focused && g_ui.screen == Screen::None, true, g_ui.frame, 34.0f, 56.0f);
+    const bool selected = focused && g_ui.screen == Screen::None;
+    if (match == nullptr) {
+        Button(c, "Settings", 0, y, 312, selected, true, g_ui.frame, 34.0f, 56.0f);
+        return;
+    }
+    // The pane's own scale (+0x44): the game's "on" animation grows the button its cursor is on.
+    const auto liveScale = [&](const char* name) {
+        const auto it = match->layout->panes.find(name);
+        const float s = it != match->layout->panes.end() ? Memory::ReadFloat32(it->second.addr + 0x44) : 1.0f;
+        return std::isfinite(s) && s > 0.5f && s < 2.0f ? s : 1.0f;
+    };
+    const float first = liveScale(match->first), second = liveScale(match->second);
+    const float held = match->heldScale != nullptr ? *match->heldScale : 0.0f;
+    Button(c, "Settings", 0, y, 308, selected, true, g_ui.frame, 34.0f, 53.0f,
+           !selected ? std::min(first, second) : held > 0.5f ? held : std::max(first, second));
 }
 
 void DrawMenuSettings(ImDrawList* list) {
@@ -902,7 +958,8 @@ void DrawMenuSettings(ImDrawList* list) {
 }
 
 void DrawPauseSettings(ImDrawList* list) {
-    DrawWindowSettings(list, PauseWindowTransform, kPauseSettingsY, g_pauseFocus.load());
+    static const MatchButtons kPauseButtons{&g_pauseLayout, "P_SBBase_00", "P_SBBase_02", &g_pauseOnScale[0]};
+    DrawWindowSettings(list, PauseWindowTransform, kPauseSettingsY, g_pauseFocus.load(), &kPauseButtons);
 }
 
 // Which of the pause window's buttons the game's own cursor is on (0 Continue, 1 Exit Course), from
@@ -1076,11 +1133,18 @@ void DrawSettingsTabs(const Canvas& c) {
 
 // The Language tab: the USA disc's three languages. The game reads the console language once at
 // boot (SCGetLanguage), so a change shows the next time it starts. Cursor rows: 1-3, then 4 OK.
+// restartNote is written in the language itself: the player choosing it may not read the one the
+// game is running in.
 struct LanguageChoice {
     const char* code;
     const char* name;
+    const char* restartNote;
 };
-constexpr LanguageChoice kLanguages[] = {{"en", "English"}, {"es", "Español"}, {"fr", "Français"}};
+constexpr LanguageChoice kLanguages[] = {
+    {"en", "English", "Restart the game to play in this language."},
+    {"es", "Español", "Reinicia el juego para jugar en este idioma."},
+    {"fr", "Français", "Redémarrez le jeu pour jouer dans cette langue."},
+};
 constexpr int kLanguageOk = 4;
 
 void DrawLanguageTab(const Canvas& c) {
@@ -1092,8 +1156,14 @@ void DrawLanguageTab(const Canvas& c) {
         Checkbox(c, -140, y, chosen == kLanguages[i].code);
         AddHit(0, y, 400, 54, 1 + i);
     }
-    const char* note = chosen != atBoot ? "Restart the game to play in this language."
-                                        : "The language of the game's text and menus.";
+    const char* note = "The language of the game's text and menus.";
+    if (chosen != atBoot) {
+        for (const LanguageChoice& language : kLanguages) {
+            if (chosen == language.code) {
+                note = language.restartNote;
+            }
+        }
+    }
     Text(c, note, 0, -82, 22, 1, chosen != atBoot ? 0xFFF0B0FFu : 0xFFFFFFFFu);
     Button(c, "OK", 0, -kSettingsHeight / 2 + 43.0f, 232, g_ui.cursor == kLanguageOk, true, g_ui.frame);
     AddHit(0, -kSettingsHeight / 2 + 43.0f, 240, 60, kLanguageOk);
@@ -1997,6 +2067,9 @@ void Draw() {
     }
     HideGameCursor(((g_menuFocus.load() && g_ui.menuSettingsShown) || (g_pauseFocus.load() && g_ui.pauseSettingsShown)) &&
                    g_ui.screen == Screen::None);
+    if (scene == kSceneStage) {
+        HoldPauseButtonScale(g_pauseFocus.load() && g_ui.pauseSettingsShown && g_ui.screen == Screen::None);
+    }
     if (!g_ui.menuSettingsShown) {
         g_menuFocus = false;
     }
