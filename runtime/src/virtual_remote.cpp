@@ -91,6 +91,14 @@ void RefreshPadsLocked() {
     }
 }
 
+// NSMBW_SMART_SPIN_LOG: what Space Smart Spin QoL made of each press.
+void SmartSpinLog(const char* what) {
+    static const bool log = std::getenv("NSMBW_SMART_SPIN_LOG") != nullptr;
+    if (log) {
+        RT_LOGF(RT_TAG_RUNTIME, "smart spin: %s\n", what);
+    }
+}
+
 // The built-in layout for port 1, used while no port has aurora's keyboard switched on.
 Intent KeyboardIntent() {
     Intent intent;
@@ -109,21 +117,54 @@ Intent KeyboardIntent() {
     if (Held(kDown)) intent.buttons |= kScreenDown;
     // Space Smart Spin QoL: a Space press (Space being a Jump key) while the player is jumping or
     // falling is a shake, a spin, rather than 2; Space then counts as no button until it is let go.
-    // The player's state is looked at once per press, never per frame.
-    static bool spaceWasDown = false, spaceSpins = false;
+    // Falling, a press within a small Mario's height (16 units) of the ground is meant as the next
+    // jump: the press waits that long at the current fall speed (2 to 7 frames), and becomes 2 if
+    // the player lands meanwhile, else the spin. The player's state is looked at on a press and
+    // during that wait only, never otherwise.
+    enum class SpaceIs { Two, Spin, Waiting };
+    static bool spaceWasDown = false;
+    static SpaceIs spaceIs = SpaceIs::Two;
+    static uint64_t waitUntilNs = 0, twoUntilNs = 0;
     int keyCount = 0;
     const bool* keys = SDL_GetKeyboardState(&keyCount);
     const bool spaceDown = keys != nullptr && SDL_SCANCODE_SPACE < keyCount && keys[SDL_SCANCODE_SPACE];
+    const uint64_t now = SDL_GetTicksNS();
+    const auto player = [] { return NetplaySession::Active() ? NetplaySession::GetStatus().localSlot : 0; };
     if (spaceDown && !spaceWasDown && SmartSpin() && Bound(kJump, SDL_SCANCODE_SPACE)) {
-        const int player = NetplaySession::Active() ? NetplaySession::GetStatus().localSlot : 0;
-        spaceSpins = GameMenus::PlayerInSpinnableAir(player);
-        intent.shake = spaceSpins;
+        float moving = 0.0f;
+        spaceIs = SpaceIs::Two;
+        if (GameMenus::PlayerInSpinnableAir(player(), &moving)) {
+            if (moving >= 0.0f) {
+                spaceIs = SpaceIs::Spin;  // still rising: nowhere near the ground
+                intent.shake = true;
+                SmartSpinLog("rising: spin");
+            } else {
+                constexpr float kSmallMarioHeight = 16.0f, kFrameNs = 16'666'667.0f;
+                // +1: the player's state shows the landing a frame after he touches down.
+                const float frames = std::clamp(kSmallMarioHeight / -moving + 1.0f, 2.0f, 7.0f);
+                spaceIs = SpaceIs::Waiting;
+                waitUntilNs = now + static_cast<uint64_t>(frames * kFrameNs);
+                SmartSpinLog("falling: waiting to see if he lands");
+            }
+        }
+    } else if (spaceIs == SpaceIs::Waiting) {
+        if (!GameMenus::PlayerInSpinnableAir(player())) {
+            spaceIs = SpaceIs::Two;  // landed (or grabbed a wall...): the press was the next jump
+            twoUntilNs = now + 40'000'000;  // a 2 press long enough to be read, Space held or not
+            SmartSpinLog("landed in the margin: 2 (a jump)");
+        } else if (now >= waitUntilNs) {
+            spaceIs = SpaceIs::Spin;
+            intent.shake = true;
+            SmartSpinLog("still in the air: spin");
+        }
     }
-    if (!spaceDown) {
-        spaceSpins = false;
+    if (!spaceDown && spaceIs != SpaceIs::Waiting) {
+        spaceIs = SpaceIs::Two;
     }
     spaceWasDown = spaceDown;
-    if (spaceSpins ? HeldIgnoring(kJump, SDL_SCANCODE_SPACE) : Held(kJump)) intent.buttons |= kWpadTwo;
+    const bool two = spaceIs == SpaceIs::Two ? Held(kJump) || now < twoUntilNs
+                                             : HeldIgnoring(kJump, SDL_SCANCODE_SPACE);
+    if (two) intent.buttons |= kWpadTwo;
     if (Held(kRun)) intent.buttons |= kWpadOne;
     if (Held(Keybinds::kA)) intent.buttons |= kWpadA;
     if (Held(kPlus)) intent.buttons |= kWpadPlus;

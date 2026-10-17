@@ -80,7 +80,9 @@ bool HasProfile(uint16_t profile) {
     return Find(profile) != 0;
 }
 
-bool PlayerInSpinnableAir(int player) {
+bool PlayerInSpinnableAir(int player, float* verticalSpeed) {
+    // dBaseActor_c's last frame's movement (position minus the one before, set in postExecute).
+    constexpr uint32_t kActorMoveY = 0xC8u;
     // daPyMng_c::m_playerID[player]: the player's fBaseID, also the first word of its object.
     constexpr uint32_t kPlayerIds = 0x80354E10u;
     // The player's sStateMgr is at +0x1464; its method's current StateID (method +0x18, +0x1C).
@@ -109,10 +111,13 @@ bool PlayerInSpinnableAir(int player) {
                 return false;
             }
             const bool spinnable = std::find(std::begin(kSpinnable), std::end(kSpinnable), state) != std::end(kSpinnable);
+            if (verticalSpeed != nullptr) {
+                *verticalSpeed = Memory::ReadFloat32(owner + kActorMoveY);
+            }
             static const bool log = std::getenv("NSMBW_SMART_SPIN_LOG") != nullptr;
             if (log) {
-                RT_LOGF(RT_TAG_RUNTIME, "smart spin: player %d state %08x -> %s\n", player, state,
-                        spinnable ? "spin" : "jump");
+                RT_LOGF(RT_TAG_RUNTIME, "smart spin: player %d state %08x moving %+.2f/frame -> %s\n", player, state,
+                        Memory::ReadFloat32(owner + kActorMoveY), spinnable ? "in the air" : "not in the air");
             }
             return spinnable;
         }

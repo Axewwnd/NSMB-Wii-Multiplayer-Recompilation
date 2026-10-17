@@ -54,7 +54,7 @@ uint32_t SelectCursorObject();
 // Player `player` (0-3) is jumping or falling, where a shake spins him (Space Smart Spin QoL): not
 // on the ground, and not wall-sliding, swimming, on Yoshi or already spinning. Walks the object
 // tree: call it on a key press, not every frame.
-bool PlayerInSpinnableAir(int player);
+bool PlayerInSpinnableAir(int player, float* verticalSpeed = nullptr);
 // NSMBW_DUMP_STATES debugging: the StateIDs held by the listed profiles' objects.
 std::string DumpStates();
 
