@@ -4,6 +4,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <thread>
@@ -227,6 +228,18 @@ bool UdpSocket::SendTo(const Address& to, const void* data, size_t size) {
     const sockaddr_in target = ToSockaddr(to);
     const auto sent = ::sendto(Native(m_socket), static_cast<const char*>(data), static_cast<int>(size), 0,
                                reinterpret_cast<const sockaddr*>(&target), sizeof(target));
+    if (sent < 0) {
+        // Rare and silent otherwise: the first few failures say why.
+        static std::atomic<int> logged{0};
+        if (logged.fetch_add(1, std::memory_order_relaxed) < 8) {
+#ifdef _WIN32
+            const int error = WSAGetLastError();
+#else
+            const int error = errno;
+#endif
+            RT_LOGF(RT_TAG_NET, "udp: send to %s failed (error %d)\n", ToString(to).c_str(), error);
+        }
+    }
     if (!m_bound && sent >= 0) {
         // The first send bound the socket to a port of the system's choosing.
         sockaddr_in bound{};
