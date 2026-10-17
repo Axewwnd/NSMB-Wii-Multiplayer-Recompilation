@@ -199,8 +199,8 @@ void WriteStdErrEarly(const char* text) {
             "generation, 2013) onward and AMD processors from Excavator (2015) onward.");
         if (compatWouldRun) {
             message.Append(
-                "\n\nThis processor can run NSMBW-compat.exe, the build for older processors that "
-                "comes in the same download. Put it in this folder, or start it instead.");
+                "\n\nThis processor can run NSMBW-compat, the build for older processors that comes "
+                "in the same download, in its \"compat\" folder. Keep that folder beside this program.");
         }
     } else {
         message.Append(
@@ -235,40 +235,55 @@ void WriteStdErrEarly(const char* text) {
 }
 
 #if !MKW_X86_LEVEL_V2
-// The v3 build on a v2-only CPU: run the compat build beside this executable ("<name>-compat" with
-// the same extension) with the same command line, and leave with its exit code. Returns only when
-// there is no such file or it could not be started.
+// The v3 build on a v2-only CPU: run the compat build in the "compat" folder beside this executable
+// ("compat\<name>-compat" with the same extension) with the same command line, and leave with its
+// exit code. Returns only when there is no such file or it could not be started.
 #if defined(_WIN32)
 void RunCompatBuild() {
-    wchar_t path[MAX_PATH + 16] = {};
-    const DWORD length = ::GetModuleFileNameW(nullptr, path, MAX_PATH);
+    wchar_t exe[MAX_PATH] = {};
+    const DWORD length = ::GetModuleFileNameW(nullptr, exe, MAX_PATH);
     if (length == 0 || length >= MAX_PATH) {
         return;
     }
-    // "...\NSMBW.exe" -> "...\NSMBW-compat.exe"
+    // "...\NSMBW.exe" -> "...\compat\NSMBW-compat.exe"
+    DWORD slash = length;
+    while (slash > 0 && exe[slash - 1] != L'\\' && exe[slash - 1] != L'/') {
+        --slash;
+    }
     DWORD dot = length;
-    while (dot > 0 && path[dot - 1] != L'.' && path[dot - 1] != L'\\' && path[dot - 1] != L'/') {
+    while (dot > slash && exe[dot - 1] != L'.') {
         --dot;
     }
-    if (dot == 0 || path[dot - 1] != L'.') {
-        dot = length + 1;  // no extension
-    }
-    wchar_t extension[16] = {};
-    for (DWORD i = dot - 1, j = 0; i < length && j < 15; ++i, ++j) {
-        extension[j] = path[i];
-    }
-    const wchar_t suffix[] = L"-compat";
-    DWORD at = dot - 1;
-    for (const wchar_t* s = suffix; *s != L'\0'; ++s) {
-        path[at++] = *s;
-    }
-    for (const wchar_t* s = extension; *s != L'\0'; ++s) {
-        path[at++] = *s;
-    }
+    const DWORD stemEnd = dot > slash ? dot - 1 : length;
+    wchar_t path[MAX_PATH + 32] = {};
+    DWORD at = 0;
+    const auto append = [&](const wchar_t* from, DWORD count) {
+        for (DWORD i = 0; i < count && at < MAX_PATH + 31; ++i) {
+            path[at++] = from[i];
+        }
+    };
+    append(exe, slash);
+    append(L"compat\\", 7);
+    append(exe + slash, stemEnd - slash);
+    append(L"-compat", 7);
+    append(exe + stemEnd, length - stemEnd);
     path[at] = L'\0';
     if (::GetFileAttributesW(path) == INVALID_FILE_ATTRIBUTES) {
         return;
     }
+    // The compat build's DLLs (SDL3, Dawn, libc++...) are this folder's: put it first on the PATH the
+    // child inherits. (Its own folder, searched first, holds only the executable.)
+    static wchar_t searchPath[32768];
+    DWORD pathAt = 0;
+    for (DWORD i = 0; i + 1 < slash && pathAt < 32000; ++i) {
+        searchPath[pathAt++] = exe[i];  // the folder without its trailing backslash
+    }
+    searchPath[pathAt++] = L';';
+    const DWORD old = ::GetEnvironmentVariableW(L"PATH", searchPath + pathAt, 32767 - pathAt);
+    if (old >= 32767 - pathAt) {
+        searchPath[pathAt] = L'\0';  // too long to keep: the folder alone still finds the DLLs
+    }
+    ::SetEnvironmentVariableW(L"PATH", searchPath);
     STARTUPINFOW startup = {};
     startup.cb = sizeof(startup);
     PROCESS_INFORMATION process = {};
@@ -286,15 +301,28 @@ void RunCompatBuild() {
 char** g_argv = nullptr;
 
 void RunCompatBuild() {
-    char path[4096 + 16] = {};
-    const ssize_t length = ::readlink("/proc/self/exe", path, 4096);
+    char exe[4096] = {};
+    const ssize_t length = ::readlink("/proc/self/exe", exe, sizeof(exe) - 1);
     if (length <= 0 || g_argv == nullptr) {
         return;
     }
-    const char suffix[] = "-compat";
-    for (size_t i = 0; i < sizeof(suffix); ++i) {
-        path[length + static_cast<ssize_t>(i)] = suffix[i];
+    // ".../NSMBW" -> ".../compat/NSMBW-compat"
+    ssize_t slash = length;
+    while (slash > 0 && exe[slash - 1] != '/') {
+        --slash;
     }
+    char path[4096 + 32] = {};
+    size_t at = 0;
+    const auto append = [&](const char* from, size_t count) {
+        for (size_t i = 0; i < count && at < sizeof(path) - 1; ++i) {
+            path[at++] = from[i];
+        }
+    };
+    append(exe, static_cast<size_t>(slash));
+    append("compat/", 7);
+    append(exe + slash, static_cast<size_t>(length - slash));
+    append("-compat", 7);
+    path[at] = '\0';
     if (::access(path, X_OK) != 0) {
         return;
     }

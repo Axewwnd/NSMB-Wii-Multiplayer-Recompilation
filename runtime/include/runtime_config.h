@@ -200,6 +200,18 @@ inline bool IsSupportedFrameInterpolationFps(uint32_t value) {
     return value == 0 || value == 120 || value == 180;
 }
 
+// NSMBW: the compat build (for older processors) lives in a "compat" folder inside the download; its
+// installation, where the data files and the "game" folder are, is the folder above it.
+inline std::filesystem::path InstallationDirectory(const std::filesystem::path& programDirectory) {
+    std::error_code ec;
+    if (programDirectory.filename() == "compat" &&
+        std::filesystem::is_regular_file(programDirectory.parent_path() / "dsp_coef.bin", ec)) {
+        return programDirectory.parent_path();
+    }
+    return programDirectory;
+}
+
+// The installation's directory: the executable's, or the one above it for the compat build.
 inline std::optional<std::filesystem::path> ExecutableDirectory() {
 #ifdef _WIN32
     std::wstring buffer(MAX_PATH, L'\0');
@@ -210,7 +222,7 @@ inline std::optional<std::filesystem::path> ExecutableDirectory() {
         }
         if (length < buffer.size() - 1) {
             buffer.resize(length);
-            return std::filesystem::path(buffer).parent_path();
+            return InstallationDirectory(std::filesystem::path(buffer).parent_path());
         }
         buffer.resize(buffer.size() * 2);
     }
@@ -229,7 +241,7 @@ inline std::optional<std::filesystem::path> ExecutableDirectory() {
         }
         if (static_cast<size_t>(length) < buffer.size()) {
             buffer.resize(static_cast<size_t>(length));
-            return std::filesystem::path(buffer).parent_path();
+            return InstallationDirectory(std::filesystem::path(buffer).parent_path());
         }
         buffer.resize(buffer.size() * 2);
     }

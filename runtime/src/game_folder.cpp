@@ -45,9 +45,7 @@ constexpr const wchar_t* kSteps =
     L"program and name it \"game\".)";
 
 fs::path ProgramDirectory() {
-    wchar_t exe[MAX_PATH] = {};
-    GetModuleFileNameW(nullptr, exe, MAX_PATH);
-    return fs::path(exe).parent_path();
+    return RuntimeConfigFile::ExecutableDirectory().value_or(fs::path{});  // the compat build's too
 }
 
 // The Windows folder picker; empty when cancelled.
@@ -99,9 +97,7 @@ constexpr const char* kSteps =
     "program and name it \"game\".)";
 
 fs::path ProgramDirectory() {
-    char exe[4096] = {};
-    const ssize_t length = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-    return length > 0 ? fs::path(std::string(exe, static_cast<size_t>(length))).parent_path() : fs::path{};
+    return RuntimeConfigFile::ExecutableDirectory().value_or(fs::path{});  // the compat build's too
 }
 
 // OK / Cancel; true for OK.
