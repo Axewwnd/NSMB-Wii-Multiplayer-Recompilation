@@ -66,6 +66,12 @@ bool BackupAllowed() {
     if ((flags & (kGameFlagFreeMode | kGameFlagCoinBattle)) != 0 || NetplaySession::Active()) {
         return false;
     }
+    // With the world map's + menu or a level's pause window open, a Quick Save from here is taken as
+    // the menu's own Quick Save, which ends the game once written: pause without a backup then.
+    if (GameMenus::PauseMenuOpen()) {
+        RT_LOGF(RT_TAG_RUNTIME, "suspend: a menu is open; pausing without a backup Quick Save\n");
+        return false;
+    }
     return !(scene == kSceneStage && GameMenus::HasProfile(kProfileOpeningTitle)) && !NandBusy();
 }
 
