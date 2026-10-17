@@ -689,6 +689,9 @@ uint32_t g_pauseHeldPane = 0;
 
 void HoldPauseButtonScale(bool hold) {
     static constexpr const char* kButtons[2] = {"P_SBBase_00", "P_SBBase_02"};
+    if (!hold && g_pauseHeldPane == 0) {
+        return;  // the usual case: nothing borrowed, nothing to give back
+    }
     const bool live = AttachPauseLayout();
     if (!hold || !live) {
         if (g_pauseHeldPane != 0 && live) {

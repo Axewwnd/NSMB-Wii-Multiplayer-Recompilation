@@ -38,6 +38,7 @@ std::mutex g_mutex;
 std::condition_variable g_wake;
 bool g_pauseWanted = false;   // guarded by g_mutex
 bool g_backupWanted = false;  // guarded by g_mutex
+std::atomic<bool> g_pauseRequested{false};  // g_pauseWanted, readable without the lock
 State g_state = State::Running;  // the game thread's
 bool g_backupWritten = false;    // the game thread's: a Quick Save of ours is on the NAND
 Clock::time_point g_saveDeadline;
@@ -115,6 +116,7 @@ void RequestPause(bool backup) {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_pauseWanted = true;
     g_backupWanted = g_backupWanted || backup;
+    g_pauseRequested.store(true, std::memory_order_release);
 }
 
 void RequestResume() {
@@ -122,6 +124,7 @@ void RequestResume() {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_pauseWanted = false;
         g_backupWanted = false;
+        g_pauseRequested.store(false, std::memory_order_release);
     }
     g_wake.notify_all();
 }
@@ -135,6 +138,11 @@ uint64_t PausedNanoseconds() {
 }
 
 uint64_t OnRetrace() {
+    TestSchedule();
+    // The usual case, on every retrace check: running, and nobody asked for a pause.
+    if (g_state == State::Running && !g_pauseRequested.load(std::memory_order_acquire)) {
+        return 0;
+    }
     // The guest code called from here can poll VI again: that nested retrace is left alone.
     static thread_local bool inside = false;
     if (inside) {
@@ -144,7 +152,6 @@ uint64_t OnRetrace() {
         Guard() { inside = true; }
         ~Guard() { inside = false; }
     } guard;
-    TestSchedule();
     if (DetClock::Enabled()) {
         return 0;  // deterministic (network) play keeps its own time: never paused from here
     }

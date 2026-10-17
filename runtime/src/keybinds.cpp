@@ -26,7 +26,7 @@ const std::array<Default, kActionCount>& Defaults() {
         {"right", "Right", {SDL_SCANCODE_RIGHT}},
         {"jump", "Jump (2)", {SDL_SCANCODE_X, SDL_SCANCODE_SPACE}},
         {"run", "Run / Fire (1)", {SDL_SCANCODE_Z, SDL_SCANCODE_LSHIFT}},
-        {"a", "A", {SDL_SCANCODE_A}},
+        {"a", "A", {SDL_SCANCODE_B}},
         {"shake", "Shake (Spin)", {SDL_SCANCODE_C, SDL_SCANCODE_LCTRL}},
         {"tilt_left", "Tilt Left", {SDL_SCANCODE_Q}},
         {"tilt_right", "Tilt Right", {SDL_SCANCODE_E}},
