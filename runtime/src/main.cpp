@@ -58,6 +58,9 @@
 #if defined(__ANDROID__)
 #include <sys/system_properties.h>
 #endif
+#if defined(__linux__) && !defined(__ANDROID__)
+#include <SDL3/SDL_messagebox.h>
+#endif
 
 #include "netplay_ui.h"
 #include "netplay_start.h"
@@ -821,9 +824,12 @@ void ShowRuntimeFatalPopup(std::string_view category, std::string_view details) 
         ::MessageBoxA(nullptr, message.c_str(), "WiiCompiled - Fatal Error",
                       MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TASKMODAL);
 #else
-        // The shipped product is Windows-first. Keep non-Windows builds safe
-        // and retain the console diagnostic when no native dialog is available.
+        // The console keeps the diagnostic; a Linux desktop also gets a dialog (SDL's, through X11,
+        // or zenity / kdialog on Wayland), since a game started from a file manager has no console.
         RT_LOGF(RT_TAG_RUNTIME, "fatal dialog: %s\n", message.c_str());
+#if defined(__linux__) && !defined(__ANDROID__)
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "NSMBW - Fatal Error", message.c_str(), nullptr);
+#endif
 #endif
     } catch (...) {
         // Reporting a crash must never throw or mask the original failure.
@@ -873,12 +879,45 @@ void WriteCrashArtifacts(std::string_view reason, std::string_view extraDetails,
 
 namespace {
 
+#if defined(__linux__) && !defined(__ANDROID__)
+// What a Linux PC is missing when the renderer can't start, in words a player can act on.
+constexpr const char* kNoDisplayHint =
+    "No desktop display was found (X11 or Wayland). Start the game from your desktop, not from a "
+    "text console or over SSH.\n\n"
+    "On a minimal install, add the display libraries:\n"
+    "  Fedora: sudo dnf install libX11 libXcursor libXext libXi libXrandr libwayland-client "
+    "libwayland-cursor libxkbcommon libdecor\n"
+    "  Ubuntu, Debian: sudo apt install libx11-6 libxcursor1 libxext6 libxi6 libxrandr2 "
+    "libwayland-client0 libwayland-cursor0 libxkbcommon0 libdecor-0-0";
+constexpr const char* kNoVulkanHint =
+    "No Vulkan driver was found. The game draws with Vulkan, so install your graphics card's "
+    "Vulkan driver:\n"
+    "  Fedora: sudo dnf install mesa-vulkan-drivers vulkan-loader\n"
+    "  Ubuntu, Debian: sudo apt install mesa-vulkan-drivers libvulkan1\n"
+    "  NVIDIA: the NVIDIA driver includes it (on Fedora, RPM Fusion's akmod-nvidia).";
+std::atomic<const char*> g_auroraLinuxHint{nullptr};
+#endif
+
 void RuntimeAuroraLogCallback(AuroraLogLevel level, const char* module,
                               const char* message, unsigned int len) {
     const std::string_view moduleView = module != nullptr ? std::string_view(module) : std::string_view{};
     const std::string_view messageView = message != nullptr ? std::string_view(message, len) : std::string_view{};
     std::cerr << "[aurora] [" << static_cast<int>(level) << "] [" << moduleView << "] "
               << messageView << std::endl;
+#if defined(__linux__) && !defined(__ANDROID__)
+    if (messageView.find("No available video device") != std::string_view::npos) {
+        g_auroraLinuxHint.store(kNoDisplayHint);
+    } else if (messageView.find("VK_KHR_surface") != std::string_view::npos ||
+               messageView.find("Null backend") != std::string_view::npos) {
+        g_auroraLinuxHint.store(kNoVulkanHint);
+    }
+    if (level == LOG_FATAL) {
+        if (const char* hint = g_auroraLinuxHint.load()) {
+            ShowRuntimeFatalPopup("the graphics could not start", hint);
+            return;
+        }
+    }
+#endif
     if (level == LOG_FATAL) {
         ShowRuntimeFatalPopup("Aurora reported a fatal renderer error", messageView);
     }
@@ -1583,6 +1622,15 @@ int RuntimeMain(int argc, char** argv) {
             RT_LOG(RT_TAG_RUNTIME) << "graphics backend: " << backendDisplayName(auroraInfo.backend)
                       << std::endl;
         }
+#if defined(__linux__) && !defined(__ANDROID__)
+        // Dawn falls back to its null adapter when there is no Vulkan driver; nothing would draw.
+        if (auroraInfo.backend == BACKEND_NULL) {
+            RT_LOG(RT_TAG_RUNTIME) << "no Vulkan driver: aurora fell back to the null backend" << std::endl;
+            ShowRuntimeFatalPopup("the graphics could not start", kNoVulkanHint);
+            MarkFatalErrorReported();
+            std::exit(EXIT_FAILURE);
+        }
+#endif
         GraphicsInfo::Set(auroraInfo.gpuName != nullptr ? auroraInfo.gpuName : "", auroraInfo.gpuCompatActive);
         RT_LOG(RT_TAG_RUNTIME) << "graphics adapter: " << GraphicsInfo::Name() << ", compatibility fixes "
                   << (auroraInfo.gpuCompatActive ? "on" : "off") << std::endl;
