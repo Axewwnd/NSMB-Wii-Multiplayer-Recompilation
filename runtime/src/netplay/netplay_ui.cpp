@@ -102,6 +102,15 @@ void AddHitEvent(float x, float y, float w, float h, int cursor, uint32_t event)
 
 std::atomic<uint64_t> g_tap{0};  // a tap for the next frame: bit 63, then x and y as 16-bit fractions
 std::atomic<bool> g_tapScreen{false};
+std::atomic<uint64_t> g_pointer{0};  // Android's finger, packed like g_tap: bit 63 while it is held
+
+// The pointer as Draw sees it this frame, in screen pixels: the finger, else the left mouse button.
+struct PointerState {
+    bool held = false;
+    bool pressed = false;  // held this frame and not the last
+    float x = 0, y = 0;
+};
+PointerState g_pointerNow;
 
 // A tap on the game's own screens is played back as remote presses on channel 1: one press, or
 // D-pad steps toward a cursor position (checked against the game's cursor before each) and then
@@ -992,8 +1001,9 @@ void DrawToggle(const Canvas& c) {
 // the whole screen (the multiplier is greyed out meanwhile). Keybinds: the keyboard's remote.
 constexpr float kScales[] = {0.5f, 0.75f, 1.0f, 1.5f, 2.0f, 3.0f, 4.0f};
 std::atomic<bool> g_settingsChanged{false};  // the Android app copies them into its own settings
-int g_settingsTab = 0;                       // 0 Video, 1 Keybinds, 2 Language
-constexpr int kSettingsTabs = 3;
+enum SettingsTab { kTabVideo, kTabAudio, kTabKeybinds, kTabLanguage };
+int g_settingsTab = kTabVideo;
+constexpr int kSettingsTabs = 4;
 float g_lastScale = 1.0f;                    // the multiplier Match Screen Resolution returns to
 bool g_lastWide = true;
 
@@ -1009,7 +1019,8 @@ constexpr bool kVSyncRow = false;
 constexpr int kVideoOk = 6;
 #endif
 constexpr int kKeyRows = 6;
-constexpr int kKeyReset = 1 + Keybinds::kActionCount, kKeyOk = kKeyReset + 1;
+constexpr int kKeySmartSpin = 1 + Keybinds::kActionCount;  // the Space Smart Spin QoL checkbox
+constexpr int kKeyReset = kKeySmartSpin + 1, kKeyOk = kKeyReset + 1;
 
 struct VideoChoice {
     float scale;
@@ -1126,12 +1137,98 @@ constexpr float kSettingsHeight = 440.0f, kSettingsWidth = 720.0f;
 
 void DrawSettingsTabs(const Canvas& c) {
     const float y = kSettingsHeight / 2 - 42.0f;
-    const char* names[kSettingsTabs] = {"Video", "Keybinds", "Language"};
+    const char* names[kSettingsTabs] = {"Video", "Audio", "Keybinds", "Language"};
     for (int tab = 0; tab < kSettingsTabs; ++tab) {
-        const float x = (tab - 1) * 228.0f;
-        Button(c, names[tab], x, y, 212, g_ui.cursor == 0 && g_settingsTab == tab, g_settingsTab == tab, g_ui.frame);
-        AddHitEvent(x, y, 220, 60, 0, kEvTab0 << tab);
+        const float x = (tab - 1.5f) * 168.0f;
+        Button(c, names[tab], x, y, 156, g_ui.cursor == 0 && g_settingsTab == tab, g_settingsTab == tab, g_ui.frame,
+               28.0f);
+        AddHitEvent(x, y, 164, 60, 0, kEvTab0 << tab);
     }
+}
+
+// The Audio tab: Master (everything), Music and Sound Effects, each a slider with its percentage to
+// its left. Cursor rows: 1-3 the sliders (left / right move 5%), then 4 OK. A finger or the mouse
+// pressed on a slider drags it; the value is saved when it is let go.
+struct VolumeRow {
+    const char* label;
+    const char* note;
+    settings_overlay::Volume which;
+};
+constexpr VolumeRow kVolumeRows[] = {
+    {"Master", "The volume of everything.", settings_overlay::Volume::Master},
+    {"Music", "The background music.", settings_overlay::Volume::Music},
+    {"Sound Effects", "Jumps, coins, enemies and the rest.", settings_overlay::Volume::SoundEffects},
+};
+constexpr int kAudioOk = 4;
+constexpr float kSliderX0 = -10.0f, kSliderX1 = 300.0f;
+int g_dragSlider = -1;  // the row a finger or the mouse is dragging, or -1
+
+float VolumeRowY(int row) {
+    return 100.0f - 72.0f * row;
+}
+
+void DrawSlider(const Canvas& c, float y, int percent, bool selected) {
+    const ImVec2 a = ToScreen(c, kSliderX0, y), b = ToScreen(c, kSliderX1, y);
+    const float s = c.view.scale;
+    const float half = 10.0f * s;
+    const auto alpha = [&](int value) { return static_cast<int>(value * c.alpha); };
+    const ImU32 edge = IM_COL32(48, 32, 10, alpha(230));
+    c.list->AddRectFilled(ImVec2(a.x, a.y - half), ImVec2(b.x, b.y + half), IM_COL32(255, 255, 255, alpha(235)), half);
+    const float fill = a.x + (b.x - a.x) * static_cast<float>(percent) / 100.0f;
+    if (percent > 0) {
+        c.list->AddRectFilled(ImVec2(a.x, a.y - half), ImVec2(std::max(fill, a.x + 2 * half), b.y + half),
+                              IM_COL32(120, 200, 40, alpha(255)), half);
+    }
+    c.list->AddRect(ImVec2(a.x, a.y - half), ImVec2(b.x, b.y + half), edge, half, 0, 3.0f * s);
+    const float knob = (selected ? 19.0f + 2.0f * Pulse(g_ui.frame) : 17.0f) * s;
+    c.list->AddCircleFilled(ImVec2(fill, a.y), knob,
+                            selected ? IM_COL32(255, 230, 60, alpha(255)) : IM_COL32(255, 255, 255, alpha(255)));
+    c.list->AddCircle(ImVec2(fill, a.y), knob, edge, 0, 3.5f * s);
+}
+
+void DrawAudioTab(const Canvas& c) {
+    // A press on a slider (a little past either end counts) starts dragging it.
+    const ImVec2 start = ToScreen(c, kSliderX0, 0), end = ToScreen(c, kSliderX1, 0);
+    const float reach = 24.0f * c.view.scale;
+    if (g_pointerNow.pressed) {
+        for (int row = 0; row < 3; ++row) {
+            const ImVec2 at = ToScreen(c, kSliderX0, VolumeRowY(row));
+            if (g_pointerNow.x >= start.x - reach && g_pointerNow.x <= end.x + reach &&
+                std::fabs(g_pointerNow.y - at.y) <= 30.0f * c.view.scale) {
+                g_dragSlider = row;
+                g_ui.cursor = 1 + row;
+            }
+        }
+    }
+    if (g_dragSlider >= 0) {
+        const settings_overlay::Volume which = kVolumeRows[g_dragSlider].which;
+        const float t = std::clamp((g_pointerNow.x - start.x) / std::max(1.0f, end.x - start.x), 0.0f, 1.0f);
+        const int percent = static_cast<int>(std::lround(t * 100.0f));
+        if (g_pointerNow.held) {
+            if (percent != settings_overlay::VolumePercent(which)) {
+                settings_overlay::SetVolumePercent(which, percent, false);
+            }
+        } else {
+            settings_overlay::SetVolumePercent(which, settings_overlay::VolumePercent(which), true);
+            g_dragSlider = -1;
+        }
+    }
+    for (int row = 0; row < 3; ++row) {
+        const float y = VolumeRowY(row);
+        const bool selected = g_ui.cursor == 1 + row;
+        const int percent = settings_overlay::VolumePercent(kVolumeRows[row].which);
+        if (selected) {
+            Cursor(c, -10, y, 660, 58, g_ui.frame);
+        }
+        Text(c, kVolumeRows[row].label, -325, y, 28, 0);
+        Text(c, std::to_string(percent) + "%", -62, y, 28, 1, selected ? 0xFFF0B0FFu : 0xFFFFFFFFu);
+        DrawSlider(c, y, percent, selected);
+        AddHit(-10, y, 660, 64, 1 + row);
+    }
+    const int row = g_ui.cursor - 1;
+    Text(c, row >= 0 && row < 3 ? kVolumeRows[row].note : "Left and right change the selected volume.", 0, -126, 21);
+    Button(c, "OK", 0, -kSettingsHeight / 2 + 43.0f, 232, g_ui.cursor == kAudioOk, true, g_ui.frame);
+    AddHit(0, -kSettingsHeight / 2 + 43.0f, 240, 60, kAudioOk);
 }
 
 // The Language tab: the USA disc's three languages. The game reads the console language once at
@@ -1220,19 +1317,20 @@ void DrawKeybindsTab(const Canvas& c) {
     for (int action = 0; action < Keybinds::kActionCount; ++action) {
         const int column = action / kKeyRows, row = action % kKeyRows;
         const float x0 = column == 0 ? -178.0f : 178.0f;
-        const float y = 122.0f - 44.0f * row;
+        const float y = 126.0f - 40.0f * row;
         Text(c, Keybinds::ActionName(action), x0 - 168, y, 21, 0);
         const std::string label = capturing == action ? "Press a key..." : Keybinds::KeyLabel(action);
         const float size = label.size() > 16 ? 17.0f : label.size() > 11 ? 19.0f : 22.0f;
-        Button(c, label, x0 + 78, y, 172, g_ui.cursor == 1 + action, true, g_ui.frame, size, 38.0f);
-        AddHit(x0 + 78, y, 178, 42, 1 + action);
+        Button(c, label, x0 + 78, y, 172, g_ui.cursor == 1 + action, true, g_ui.frame, size, 35.0f);
+        AddHit(x0 + 78, y, 178, 38, 1 + action);
     }
-#ifdef __ANDROID__
-    const char* note = "For a keyboard plugged into the device.";
-#else
-    const char* note = "Controllers: F10 > Controls.";
-#endif
-    Text(c, capturing >= 0 ? "Press the new key (Esc cancels)." : note, 0, -140, 20);
+    if (capturing >= 0) {
+        Text(c, "Press the new key (Esc cancels).", 0, -122, 22);
+    } else {
+        Button(c, "Space Smart Spin QoL", 24, -122, 400, g_ui.cursor == kKeySmartSpin, true, g_ui.frame, 26.0f, 36.0f);
+        Checkbox(c, -150, -122, Keybinds::SmartSpin());
+        AddHit(0, -122, 410, 40, kKeySmartSpin);
+    }
     const float y = -kSettingsHeight / 2 + 43.0f;
     Button(c, "Reset Defaults", -126, y, 232, g_ui.cursor == kKeyReset, true, g_ui.frame, 26.0f);
     Button(c, "OK", 126, y, 232, g_ui.cursor == kKeyOk, true, g_ui.frame);
@@ -1243,9 +1341,11 @@ void DrawKeybindsTab(const Canvas& c) {
 void DrawSettings(const Canvas& c) {
     Window(c, kSettingsHeight, kSettingsWidth);
     DrawSettingsTabs(c);
-    if (g_settingsTab == 0) {
+    if (g_settingsTab == kTabVideo) {
         DrawVideoTab(c);
-    } else if (g_settingsTab == 1) {
+    } else if (g_settingsTab == kTabAudio) {
+        DrawAudioTab(c);
+    } else if (g_settingsTab == kTabKeybinds) {
         DrawKeybindsTab(c);
     } else {
         DrawLanguageTab(c);
@@ -1274,7 +1374,7 @@ void HandleSettings(bool left, bool right, bool up, bool down, bool confirm, boo
         } else if (confirm) {
             g_settingsTab = (g_settingsTab + 1) % kSettingsTabs;
         } else if (down) {
-            cursor = g_settingsTab == 0 && settings_overlay::RenderScale() <= 0.0f ? 2 : 1;
+            cursor = g_settingsTab == kTabVideo && settings_overlay::RenderScale() <= 0.0f ? 2 : 1;
         } else if (back) {
             CloseSettings();
         }
@@ -1284,7 +1384,7 @@ void HandleSettings(bool left, bool right, bool up, bool down, bool confirm, boo
         CloseSettings();
         return;
     }
-    if (g_settingsTab == 0) {
+    if (g_settingsTab == kTabVideo) {
         const bool match = settings_overlay::RenderScale() <= 0.0f;
         if (up) cursor = cursor == 2 && match ? 0 : cursor - 1;
         if (down) cursor = std::min(kVideoOk, cursor + 1);
@@ -1308,7 +1408,21 @@ void HandleSettings(bool left, bool right, bool up, bool down, bool confirm, boo
         }
         return;
     }
-    if (g_settingsTab == 2) {
+    if (g_settingsTab == kTabAudio) {
+        if (up) cursor = cursor - 1;
+        if (down) cursor = std::min(kAudioOk, cursor + 1);
+        if (cursor >= 1 && cursor <= 3 && (left || right)) {
+            const settings_overlay::Volume which = kVolumeRows[cursor - 1].which;
+            const int now = settings_overlay::VolumePercent(which);
+            // Steps of 5, landing on a multiple of 5 from a dragged-in value like 37.
+            const int next = left ? (now - 1) / 5 * 5 : (now + 5) / 5 * 5;
+            settings_overlay::SetVolumePercent(which, next, true);
+        } else if (confirm && cursor == kAudioOk) {
+            CloseSettings();
+        }
+        return;
+    }
+    if (g_settingsTab == kTabLanguage) {
         if (up) cursor = cursor - 1;
         if (down) cursor = std::min(kLanguageOk, cursor + 1);
         if (confirm && cursor >= 1 && cursor <= 3) {
@@ -1319,16 +1433,22 @@ void HandleSettings(bool left, bool right, bool up, bool down, bool confirm, boo
         }
         return;
     }
+    if (cursor == kKeySmartSpin) {
+        if (up) cursor = kKeyRows;
+        if (down) cursor = kKeyReset;
+        if (confirm) Keybinds::SetSmartSpin(!Keybinds::SmartSpin());
+        return;
+    }
     if (cursor >= kKeyReset) {
         if (left || right) cursor = cursor == kKeyReset ? kKeyOk : kKeyReset;
-        if (up) cursor = cursor == kKeyReset ? kKeyRows : 2 * kKeyRows;
+        if (up) cursor = kKeySmartSpin;
         if (confirm && cursor == kKeyReset) Keybinds::ResetDefaults();
         if (confirm && cursor == kKeyOk) CloseSettings();
         return;
     }
     const int action = cursor - 1, column = action / kKeyRows, row = action % kKeyRows;
     if (up) cursor = row == 0 ? 0 : cursor - 1;
-    if (down) cursor = row == kKeyRows - 1 ? (column == 0 ? kKeyReset : kKeyOk) : cursor + 1;
+    if (down) cursor = row == kKeyRows - 1 ? kKeySmartSpin : cursor + 1;
     if ((left && column == 1) || (right && column == 0)) cursor = 1 + (1 - column) * kKeyRows + row;
     if (confirm) Keybinds::BeginCapture(action);
 }
@@ -1763,6 +1883,12 @@ void Tap(float x, float y) {
     g_tap.store((1ull << 63) | (fx << 16) | fy, std::memory_order_release);
 }
 
+void Pointer(float x, float y, bool held) {
+    const uint64_t fx = static_cast<uint64_t>(std::clamp(x, 0.0f, 1.0f) * 65535.0f);
+    const uint64_t fy = static_cast<uint64_t>(std::clamp(y, 0.0f, 1.0f) * 65535.0f);
+    g_pointer.store((held ? 1ull << 63 : 0) | (fx << 16) | fy, std::memory_order_release);
+}
+
 bool TapScreenUp() {
     return g_tapScreen.load(std::memory_order_acquire);
 }
@@ -2090,6 +2216,18 @@ void Draw() {
                       std::memory_order_release);
     {
         const ImGuiIO& io = ImGui::GetIO();
+        const uint64_t finger = g_pointer.load(std::memory_order_acquire);
+        const bool wasHeld = g_pointerNow.held;
+        if ((finger >> 63) != 0) {
+            g_pointerNow.held = true;
+            g_pointerNow.x = static_cast<float>((finger >> 16) & 0xFFFF) / 65535.0f * io.DisplaySize.x;
+            g_pointerNow.y = static_cast<float>(finger & 0xFFFF) / 65535.0f * io.DisplaySize.y;
+        } else {
+            g_pointerNow.held = io.MouseDown[0] && !io.WantCaptureMouse;
+            g_pointerNow.x = io.MousePos.x;
+            g_pointerNow.y = io.MousePos.y;
+        }
+        g_pointerNow.pressed = g_pointerNow.held && !wasHeld;
         float tapX = -1.0f, tapY = -1.0f;
         const uint64_t tap = g_tap.exchange(0, std::memory_order_acq_rel);
         if ((tap >> 63) != 0) {

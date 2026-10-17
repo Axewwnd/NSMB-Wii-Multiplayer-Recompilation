@@ -13,6 +13,10 @@ void SetMusicVolume(float volume) noexcept;
 void SetSoundEffectsVolume(float volume) noexcept;
 void SetUiVolume(float volume) noexcept;
 void SetVoicesVolume(float volume) noexcept;
+// NSMBW: the Music and Sound Effects volumes (0 to 1). The AX mix applies them to what the speakers
+// play, never to guest memory, so devices in a LAN game stay identical whatever their volumes.
+float MusicVolume() noexcept;
+float SoundEffectsVolume() noexcept;
 bool IsExternalMediaPlaying() noexcept;
 bool IsMediaControlAvailable() noexcept;
 bool IsMediaControlInitializationComplete() noexcept;

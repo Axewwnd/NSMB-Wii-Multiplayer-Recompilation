@@ -28,6 +28,9 @@ void OnSessionStall();
 // On the game's own menu screens it becomes the remote presses that move the cursor there and pick
 // it; on these menus it presses the button under it. Mouse clicks on desktop arrive the same way.
 void Tap(float x, float y);
+// A finger on the screen (Android): where it is, as fractions of the game's window, while held is
+// true; held false when it is lifted. Sliders follow it (on desktop they follow the mouse).
+void Pointer(float x, float y, bool held);
 // True while a screen that taps can drive is up (the strap and title screens, the file select,
 // "Select Players", these menus): the Android app hides its on-screen remote then.
 bool TapScreenUp();

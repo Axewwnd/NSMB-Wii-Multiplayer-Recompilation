@@ -1776,6 +1776,40 @@ int32_t Aspect() noexcept {
     return DisplaySettings::Latest().aspect;
 }
 
+void SetVolumePercent(Volume which, int percent, bool save) noexcept {
+    percent = std::clamp(percent, 0, 100);
+    const float volume = static_cast<float>(percent) / 100.0f;
+    switch (which) {
+    case Volume::Master:
+        g_audioVolumePercent = percent;
+        AudioBackend::Instance().SetMasterVolume(volume);
+        if (save) RuntimeConfigFile::SetAudioVolume(volume);
+        break;
+    case Volume::Music:
+        g_musicVolumePercent = percent;
+        MusicAttenuation::SetMusicVolume(volume);
+        if (save) RuntimeConfigFile::SetMusicVolume(volume);
+        break;
+    case Volume::SoundEffects:
+        g_soundEffectsVolumePercent = percent;
+        MusicAttenuation::SetSoundEffectsVolume(volume);
+        if (save) RuntimeConfigFile::SetSoundEffectsVolume(volume);
+        break;
+    }
+}
+
+int VolumePercent(Volume which) noexcept {
+    switch (which) {
+    case Volume::Master:
+        return g_audioVolumePercent;
+    case Volume::Music:
+        return g_musicVolumePercent;
+    case Volume::SoundEffects:
+        return g_soundEffectsVolumePercent;
+    }
+    return 100;
+}
+
 void ReleaseControllers() noexcept {
     // Aurora drives the LED white on first PADRead and never clears it, and the
     // exit paths terminate the process outright, so do it here.

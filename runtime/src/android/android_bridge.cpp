@@ -107,6 +107,12 @@ JNIEXPORT void JNICALL Java_com_wither_nsmbw_GameActivity_nativePrepareToLeave(J
 }
 
 // GameActivity.nativeTap: a tap on the game's menus, as fractions of the screen (netplay_ui.h).
+JNIEXPORT void JNICALL Java_com_wither_nsmbw_GameActivity_nativePointer(JNIEnv*, jclass, jfloat x, jfloat y,
+                                                                      jboolean held)
+{
+    NetplayUi::Pointer(x, y, held != JNI_FALSE);
+}
+
 JNIEXPORT void JNICALL Java_com_wither_nsmbw_GameActivity_nativeTap(JNIEnv*, jclass, jfloat x, jfloat y)
 {
     NetplayUi::Tap(x, y);

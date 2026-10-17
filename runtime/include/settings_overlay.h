@@ -33,4 +33,10 @@ float RenderScale() noexcept;
 // DisplaySettings' aspect (4:3, 16:9, Fill), including a change not yet applied. Saved to Config.toml.
 void SetAspect(int32_t mode) noexcept;
 int32_t Aspect() noexcept;
+// The volumes in percent, 0 to 100: everything (the speakers' master volume), the music, and the
+// sound effects. Applied at once; save writes them to Config.toml (a slider being dragged saves
+// when it is let go).
+enum class Volume { Master, Music, SoundEffects };
+void SetVolumePercent(Volume which, int percent, bool save) noexcept;
+int VolumePercent(Volume which) noexcept;
 } // namespace settings_overlay

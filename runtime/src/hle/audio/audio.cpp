@@ -110,6 +110,9 @@ bool PushAudioBlock(uint32_t startAddr, uint32_t length) {
     }
 
     if (src) {
+        if (const uint8_t* speaker = AxDspHle::SpeakerBlock(startAddr, bytes)) {
+            src = speaker;  // the Music / Sound Effects volumes, applied outside guest memory
+        }
         MeterAudioBlock(src, bytes);
         return AudioBackend::Instance().PushWiiAiSamplesBE16(src, bytes);
     }

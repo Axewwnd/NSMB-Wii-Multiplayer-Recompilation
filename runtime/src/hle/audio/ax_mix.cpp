@@ -7,6 +7,7 @@
 #include "ax_mix_kernels.h"
 #include "isa/big_endian.h"
 #include "memory.h"
+#include "music_attenuation.h"
 #include "ppc_runtime.h"
 #include "runtime_config.h"
 #include "runtime_log.h"
@@ -573,6 +574,15 @@ private:
     }
 
     void SetupProcessing(uint32_t initAddr) {
+        // A frame starts here: the music share of the main buses starts empty, and is kept at
+        // all only while Music and Sound Effects differ from 100%.
+        m_musicVolume = MusicAttenuation::MusicVolume();
+        m_effectsVolume = MusicAttenuation::SoundEffectsVolume();
+        m_splitMix = m_musicVolume != 1.0f || m_effectsVolume != 1.0f;
+        if (m_splitMix) {
+            m_musicL.fill(0);
+            m_musicR.fill(0);
+        }
         const AXBuffers buffers = MixBuffers();
         for (size_t i = 0; i < buffers.size(); ++i) {
             const uint32_t value = (MixRead16(initAddr + static_cast<uint32_t>(i * 6)) << 16) |
@@ -986,6 +996,10 @@ private:
                 static_cast<int>((static_cast<int64_t>(m_bus[kBusMainL][i]) * coef) >> 15);
             m_bus[kBusMainR][i] =
                 static_cast<int>((static_cast<int64_t>(m_bus[kBusMainR][i]) * coef) >> 15);
+            if (m_splitMix) {
+                m_musicL[i] = static_cast<int>((static_cast<int64_t>(m_musicL[i]) * coef) >> 15);
+                m_musicR[i] = static_cast<int>((static_cast<int64_t>(m_musicR[i]) * coef) >> 15);
+            }
         }
     }
 
@@ -1017,8 +1031,26 @@ private:
             }
             MixAdd(out, samples.data(), count, vd, dpop, (control & rampBit) != 0);
         };
-        mix(MIX_MAIN_L, MIX_MAIN_L_RAMP, buffers[kBusMainL], pb.mixer.main_left, pb.dpop.main_left);
-        mix(MIX_MAIN_R, MIX_MAIN_R_RAMP, buffers[kBusMainR], pb.mixer.main_right, pb.dpop.main_right);
+        // A music voice (a stream: NSMBW's music is all streamed) mixes its main left and right
+        // into a zeroed block first, then adds that to the bus and to the music share. MixAdd adds
+        // each clamped sample to what is there, so the bus ends up exactly as without the split.
+        auto mixMain = [&](uint32_t bit, uint32_t rampBit, int* out, int* music, VolumeData& vd, int16_t& dpop) {
+            if (!m_splitMix || pb.is_stream != 1 || (control & bit) == 0) {
+                mix(bit, rampBit, out, vd, dpop);
+                return;
+            }
+            std::array<int, kAxSamplesPerFrame> voice{};
+            MixAdd(voice.data(), samples.data(), count, vd, dpop, (control & rampBit) != 0);
+            for (uint32_t i = 0; i < count; ++i) {
+                out[i] += voice[i];
+                music[i] += voice[i];
+            }
+        };
+        const size_t busOffset = static_cast<size_t>(buffers[kBusMainL] - m_bus[kBusMainL].data());
+        mixMain(MIX_MAIN_L, MIX_MAIN_L_RAMP, buffers[kBusMainL], m_musicL.data() + busOffset, pb.mixer.main_left,
+                pb.dpop.main_left);
+        mixMain(MIX_MAIN_R, MIX_MAIN_R_RAMP, buffers[kBusMainR], m_musicR.data() + busOffset, pb.mixer.main_right,
+                pb.dpop.main_right);
         mix(MIX_MAIN_S, MIX_MAIN_S_RAMP, buffers[kBusMainS], pb.mixer.main_surround, pb.dpop.main_surround);
         mix(MIX_AUXA_L, MIX_AUXA_L_RAMP, buffers[kBusAuxAL], pb.mixer.auxA_left, pb.dpop.auxA_left);
         mix(MIX_AUXA_R, MIX_AUXA_R_RAMP, buffers[kBusAuxAR], pb.mixer.auxA_right, pb.dpop.auxA_right);
@@ -1240,6 +1272,9 @@ private:
                                 m_bus[kBusAuxCL].data(), kAxSamplesPerFrame);
         }
         std::array<int16_t, kAxSamplesPerFrame * 2> pcm{};
+        if (m_splitMix) {
+            RecordSpeakerFrame(lrAddr, ramp);
+        }
         for (uint32_t i = 0; i < kAxSamplesPerFrame; ++i) {
             const int16_t left = ClampS16((static_cast<int64_t>(m_bus[kBusMainL][i]) * ramp[i]) >> 15);
             const int16_t right = ClampS16((static_cast<int64_t>(m_bus[kBusMainR][i]) * ramp[i]) >> 15);
@@ -1265,6 +1300,65 @@ private:
         }
     }
 
+    // What the speakers play of this frame: the music share at the Music volume and the rest
+    // (effects, and the aux returns, which carry the effects' reverb) at the Sound Effects
+    // volume. The frame the game sees is written as before; the speaker frame is kept here, with
+    // a copy of that guest frame, for PushAudioBlock to play instead.
+    void RecordSpeakerFrame(uint32_t lrAddr, const std::array<uint16_t, kAxSamplesPerFrame>& ramp) {
+        SpeakerFrame& frame = m_speakerFrames[m_nextSpeakerFrame];
+        m_nextSpeakerFrame = (m_nextSpeakerFrame + 1) % m_speakerFrames.size();
+        frame.addr = lrAddr;
+        const auto speaker = [&](int bus, int music, uint16_t gain) {
+            const int64_t all = (static_cast<int64_t>(bus) * gain) >> 15;
+            const int64_t musicPart = (static_cast<int64_t>(music) * gain) >> 15;
+            const float mixed = static_cast<float>(musicPart) * m_musicVolume +
+                                static_cast<float>(all - musicPart) * m_effectsVolume;
+            return ClampS16(static_cast<int64_t>(mixed));
+        };
+        for (uint32_t i = 0; i < kAxSamplesPerFrame; ++i) {
+            const int16_t left = ClampS16((static_cast<int64_t>(m_bus[kBusMainL][i]) * ramp[i]) >> 15);
+            const int16_t right = ClampS16((static_cast<int64_t>(m_bus[kBusMainR][i]) * ramp[i]) >> 15);
+            // AI frames are right, left, big-endian: the same layout as the guest frame.
+            BigEndian::Write16(frame.guest.data() + i * 4, static_cast<uint16_t>(right));
+            BigEndian::Write16(frame.guest.data() + i * 4 + 2, static_cast<uint16_t>(left));
+            BigEndian::Write16(frame.speaker.data() + i * 4,
+                               static_cast<uint16_t>(speaker(m_bus[kBusMainR][i], m_musicR[i], ramp[i])));
+            BigEndian::Write16(frame.speaker.data() + i * 4 + 2,
+                               static_cast<uint16_t>(speaker(m_bus[kBusMainL][i], m_musicL[i], ramp[i])));
+        }
+        frame.valid = true;
+        m_musicL.fill(0);
+        m_musicR.fill(0);
+    }
+
+public:
+    // The speaker version of the AI block at [addr, addr + bytes), when every frame in it was
+    // recorded and the guest memory there still holds exactly what the mix wrote.
+    const uint8_t* SpeakerBlock(uint32_t addr, uint32_t bytes) {
+        constexpr uint32_t kFrameBytes = kAxSamplesPerFrame * 4;
+        if (bytes == 0 || bytes % kFrameBytes != 0 || bytes > m_speakerBlock.size()) {
+            return nullptr;
+        }
+        for (uint32_t offset = 0; offset < bytes; offset += kFrameBytes) {
+            // The newest frame written there: the mix reuses its two output buffers frame after frame.
+            const SpeakerFrame* found = nullptr;
+            for (size_t back = 1; back <= m_speakerFrames.size() && found == nullptr; ++back) {
+                const SpeakerFrame& frame =
+                    m_speakerFrames[(m_nextSpeakerFrame + m_speakerFrames.size() - back) % m_speakerFrames.size()];
+                if (frame.valid && frame.addr == addr + offset) {
+                    found = &frame;
+                }
+            }
+            const uint8_t* guest = found != nullptr ? MixResolveRange(addr + offset, kFrameBytes) : nullptr;
+            if (guest == nullptr || std::memcmp(guest, found->guest.data(), kFrameBytes) != 0) {
+                return nullptr;
+            }
+            std::memcpy(m_speakerBlock.data() + offset, found->speaker.data(), kFrameBytes);
+        }
+        return m_speakerBlock.data();
+    }
+
+private:
     void OutputWMSamples(uint32_t* addresses) {
         const AXBuffers all = MixBuffers();
         const std::array<int*, 4> buffers = {all[kBusWm0Main], all[kBusWm1Main], all[kBusWm2Main],
@@ -1416,6 +1510,22 @@ private:
     uint16_t m_lastMainVolume = 0x8000;
     std::array<uint16_t, 3> m_lastAuxVolumes{};
 
+    // The Music / Sound Effects split of the speaker output (RecordSpeakerFrame).
+    struct SpeakerFrame {
+        uint32_t addr = 0;
+        bool valid = false;
+        std::array<uint8_t, kAxSamplesPerFrame * 4> guest{};
+        std::array<uint8_t, kAxSamplesPerFrame * 4> speaker{};
+    };
+    bool m_splitMix = false;
+    float m_musicVolume = 1.0f;
+    float m_effectsVolume = 1.0f;
+    std::array<int, kAxSamplesPerFrame> m_musicL{};
+    std::array<int, kAxSamplesPerFrame> m_musicR{};
+    std::array<SpeakerFrame, 8> m_speakerFrames{};
+    size_t m_nextSpeakerFrame = 0;
+    std::array<uint8_t, kAxSamplesPerFrame * 4 * 8> m_speakerBlock{};
+
     // Mix worker handshake.
     std::thread m_mixThread;
     mutable std::mutex m_mixMutex;
@@ -1554,6 +1664,10 @@ void InitAram() {
     Instance().JoinMix();
     RefreshMixMemoryMap();
     g_aramWindowGeneration.fetch_add(1, std::memory_order_relaxed);
+}
+
+const uint8_t* SpeakerBlock(uint32_t addr, uint32_t bytes) {
+    return Instance().SpeakerBlock(addr, bytes);
 }
 
 void JoinMixWorker() {

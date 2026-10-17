@@ -528,6 +528,14 @@ void SetSoundEffectsVolume(float volume) noexcept {
     g_soundEffectsVolume.store(ClampSoundPlayerVolume(volume), std::memory_order_release);
 }
 
+float MusicVolume() noexcept {
+    return g_musicVolume.load(std::memory_order_acquire);
+}
+
+float SoundEffectsVolume() noexcept {
+    return g_soundEffectsVolume.load(std::memory_order_acquire);
+}
+
 void SetUiVolume(float volume) noexcept {
     g_uiVolume.store(ClampSoundPlayerVolume(volume), std::memory_order_release);
 }
