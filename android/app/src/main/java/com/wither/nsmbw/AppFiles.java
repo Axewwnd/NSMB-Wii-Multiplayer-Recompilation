@@ -137,11 +137,11 @@ final class AppFiles {
                 + "frame_graph = " + settings.frameGraph() + "\n"
                 + "texture_replacements = false\n"
                 + "texture_dumps = false\n"
-                + "\n[audio]\n"
+                + (hasTable(config, "audio") ? "" : "\n[audio]\n"
                 + "volume = 1.0\n"
                 + "muted = false\n"
                 + "attenuate_music_when_media_plays = false\n"
-                + "mix_worker = true\n"
+                + "mix_worker = true\n")
                 + "\n[network]\nenabled = false\n"
                 + "\n[discord]\nenabled = false\n"
                 + "\n[paths]\n"
@@ -151,7 +151,21 @@ final class AppFiles {
 
     /** Tables of the old Config.toml the app doesn't write (the game's own: keyboard keybinds...). */
     private static final java.util.Set<String> APP_TABLES =
-            new java.util.HashSet<>(java.util.Arrays.asList("video", "audio", "network", "discord", "paths"));
+            new java.util.HashSet<>(java.util.Arrays.asList("video", "network", "discord", "paths"));
+
+    /** Whether the old Config.toml has [name]: the game's Audio settings live in [audio], so an
+     *  existing one is kept (keptSections) rather than reset to the defaults. */
+    private static boolean hasTable(File config, String name) {
+        if (!config.isFile()) return false;
+        try {
+            for (String line : java.nio.file.Files.readAllLines(config.toPath(), java.nio.charset.StandardCharsets.UTF_8)) {
+                if (line.trim().equals("[" + name + "]")) return true;
+            }
+        } catch (IOException e) {
+            android.util.Log.w("NSMBW", "could not read the old Config.toml", e);
+        }
+        return false;
+    }
 
     private static String keptSections(File config) {
         if (!config.isFile()) return "";

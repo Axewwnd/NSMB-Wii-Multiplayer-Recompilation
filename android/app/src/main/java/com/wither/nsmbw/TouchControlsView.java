@@ -44,6 +44,9 @@ final class TouchControlsView extends View {
         void onMenu();
         /** A tap on the game while its menus are up (menu mode), as fractions of the view. */
         void onTap(float x, float y);
+        /** A finger held on the game's menus (menu mode), as fractions of the view; held is false
+         *  when it is lifted. The game's sliders follow it. */
+        void onPointer(float x, float y, boolean held);
     }
 
     private static final class Button {
@@ -73,6 +76,7 @@ final class TouchControlsView extends View {
     private boolean menuMode;  // the game's menus are up: no remote, taps go to the game
     private boolean haptics = true;
     private final android.util.SparseArray<float[]> tapStarts = new android.util.SparseArray<>();
+    private int dragId = -1;  // the finger the game's menus follow (onPointer), or -1
     private final android.util.SparseLongArray tapTimes = new android.util.SparseLongArray();
 
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -167,6 +171,7 @@ final class TouchControlsView extends View {
     public boolean onTouchEvent(MotionEvent e) {
         final int action = e.getActionMasked();
         if (action == MotionEvent.ACTION_CANCEL) {
+            endDrag(e.getX(), e.getY());
             release();
             return true;
         }
@@ -175,13 +180,19 @@ final class TouchControlsView extends View {
             tapStarts.put(e.getPointerId(i), new float[] {e.getX(i), e.getY(i)});
             tapTimes.put(e.getPointerId(i), e.getEventTime());
             press(e.getPointerId(i), e.getX(i), e.getY(i));
+            if (menuMode && dragId < 0 && pointerModes.get(e.getPointerId(i), 0) != MODE_MENU) {
+                dragId = e.getPointerId(i);
+                sendPointer(e.getX(i), e.getY(i), true);
+            }
         } else if (action == MotionEvent.ACTION_MOVE) {
             for (int i = 0; i < e.getPointerCount(); ++i) {
                 slide(e.getPointerId(i), e.getX(i), e.getY(i));
+                if (e.getPointerId(i) == dragId) sendPointer(e.getX(i), e.getY(i), true);
             }
         } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP) {
             final int i = e.getActionIndex();
             final int id = e.getPointerId(i);
+            if (id == dragId) endDrag(e.getX(i), e.getY(i));
             final boolean openMenu = pointerModes.get(id, 0) == MODE_MENU && menuAt(e.getX(i), e.getY(i));
             final float[] start = tapStarts.get(id);
             // Taps go to the game on its menus, and anywhere off the remote's buttons otherwise (the
@@ -207,6 +218,19 @@ final class TouchControlsView extends View {
         }
         update(combined);
         return true;
+    }
+
+    private void sendPointer(float x, float y, boolean held) {
+        if (listener != null && getWidth() > 0 && getHeight() > 0) {
+            listener.onPointer(x / getWidth(), y / getHeight(), held);
+        }
+    }
+
+    private void endDrag(float x, float y) {
+        if (dragId >= 0) {
+            dragId = -1;
+            sendPointer(x, y, false);
+        }
     }
 
     private void press(int id, float x, float y) {

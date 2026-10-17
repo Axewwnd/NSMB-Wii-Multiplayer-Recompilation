@@ -43,6 +43,7 @@ public final class GameActivity extends SDLActivity
     static native void nativePrepareToLeave();
     /** A tap on the game's menus, as fractions of the screen. */
     static native void nativeTap(float x, float y);
+    static native void nativePointer(float x, float y, boolean held);
     /** Whether a menu that taps drive is up (the remote is hidden then). */
     static native boolean nativeTapScreen();
     /** {render scale, show FPS, aspect} after the game's own settings window changed them, else null. */
@@ -143,6 +144,11 @@ public final class GameActivity extends SDLActivity
     @Override
     public void onTap(float x, float y) {
         if (nativeReady) nativeTap(x, y);
+    }
+
+    @Override
+    public void onPointer(float x, float y, boolean held) {
+        if (nativeReady) nativePointer(x, y, held);
     }
 
     @Override
