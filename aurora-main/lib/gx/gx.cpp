@@ -236,6 +236,51 @@ absl::flat_hash_map<StaticPaletteTextureKey, StaticPaletteTextureSourceEntry> s_
 absl::flat_hash_map<u32, StaticTextureKey> s_texObjSourceKeys;
 absl::flat_hash_map<u32, StaticPaletteTextureKey> s_texObjPaletteSourceKeys;
 
+// NSMBW: static textures by content. The caches above are keyed by where the texture is in guest
+// RAM, and a scene change reloads the game's archives at new addresses, so every texture of the new
+// scene used to be decoded and uploaded again in the scene's first frame - Mario, the HUD, the map,
+// all identical to the last scene's. An identical texture now reuses its GPU texture. Kept to a
+// budget (least recently used out); a texture that a copy patches in place (animated tiles) is
+// dropped from here, since its GPU contents no longer match the bytes it is filed under.
+struct StaticTextureContentKey {
+  u64 digest = 0;
+  u32 size = 0;
+  u32 width = 0;
+  u32 height = 0;
+  u32 mips = 0;
+  u32 format = 0;
+
+  bool operator==(const StaticTextureContentKey& rhs) const = default;
+  template <typename H>
+  friend H AbslHashValue(H h, const StaticTextureContentKey& key) {
+    return H::combine(std::move(h), key.digest, key.size, key.width, key.height, key.mips, key.format);
+  }
+};
+struct StaticTextureContentEntry {
+  gfx::TextureHandle handle;
+  u64 lastUse = 0;
+  size_t bytes = 0;
+};
+absl::flat_hash_map<StaticTextureContentKey, StaticTextureContentEntry> s_staticTextureContentCache;
+u64 s_contentCacheClock = 0;
+size_t s_contentCacheBytes = 0;
+constexpr size_t kContentCacheBudgetBytes = 96u << 20;
+
+void forget_content_cached_handle(const gfx::TextureHandle& handle) {
+  absl::erase_if(s_staticTextureContentCache, [&](const auto& item) {
+    if (item.second.handle != handle) {
+      return false;
+    }
+    s_contentCacheBytes -= item.second.bytes;
+    return true;
+  });
+}
+
+void clear_static_texture_content_cache() {
+  s_staticTextureContentCache.clear();
+  s_contentCacheBytes = 0;
+}
+
 // A repeated bind of the same texture object re-derives the same source key and re-stores it into the map above on every resolve.
 template <typename Key>
 struct TexObjSourceKeyMemo {
@@ -587,6 +632,7 @@ std::vector<PatchTarget> find_patch_targets(const void* dest) {
     }
     const u32 blocksPerRow = (key.width + blockW - 1) / blockW;
     const u32 block = static_cast<u32>(d - base) / blockBytes;
+    forget_content_cached_handle(entry.handle);
     targets.push_back({entry.handle, (block % blocksPerRow) * blockW, (block / blocksPerRow) * blockH});
   }
   return targets;
@@ -646,8 +692,43 @@ gfx::TextureHandle resolve_static_texture(const GXTexObj_& obj) {
     const u32 dataSize = GXGetTexBufferSize(static_cast<u16>(obj.width()), static_cast<u16>(obj.height()),
                                             obj.format(), obj.has_mips(),
                                             obj.has_mips() ? static_cast<u8>(obj.mip_count() - 1) : 0);
-    handle = gfx::new_static_texture_2d(obj.width(), obj.height(), obj.mip_count(), obj.format(),
-                                        {static_cast<const uint8_t*>(obj.data), dataSize}, false, nameStr);
+    const bool byContent = canUseSourceCache && dataSize != 0;
+    const StaticTextureContentKey contentKey =
+        byContent ? StaticTextureContentKey{digest_source_bytes(obj.data, dataSize), dataSize, obj.width(),
+                                            obj.height(), obj.mip_count(), static_cast<u32>(obj.format())}
+                  : StaticTextureContentKey{};
+    if (byContent) {
+      if (const auto it = s_staticTextureContentCache.find(contentKey); it != s_staticTextureContentCache.end()) {
+        it->second.lastUse = ++s_contentCacheClock;
+        handle = it->second.handle;
+      }
+    }
+    if (!handle) {
+      handle = gfx::new_static_texture_2d(obj.width(), obj.height(), obj.mip_count(), obj.format(),
+                                          {static_cast<const uint8_t*>(obj.data), dataSize}, false, nameStr);
+      if (byContent && handle) {
+        // What the GPU holds: RGBA8 texels, a third more with mips.
+        const size_t bytes = size_t{obj.width()} * obj.height() * 4 * (obj.mip_count() > 1 ? 4 : 3) / 3;
+        s_staticTextureContentCache[contentKey] = {handle, ++s_contentCacheClock, bytes};
+        s_contentCacheBytes += bytes;
+        if (s_contentCacheBytes > kContentCacheBudgetBytes) {
+          std::vector<std::pair<u64, StaticTextureContentKey>> byAge;
+          byAge.reserve(s_staticTextureContentCache.size());
+          for (const auto& [key, entry] : s_staticTextureContentCache) {
+            byAge.emplace_back(entry.lastUse, key);
+          }
+          std::sort(byAge.begin(), byAge.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+          for (const auto& [age, key] : byAge) {
+            if (s_contentCacheBytes <= kContentCacheBudgetBytes * 3 / 4) {
+              break;
+            }
+            const auto it = s_staticTextureContentCache.find(key);
+            s_contentCacheBytes -= it->second.bytes;
+            s_staticTextureContentCache.erase(it);
+          }
+        }
+      }
+    }
   }
   if (canCacheUpload) {
     store_cached_texture(obj, handle);
@@ -1138,6 +1219,7 @@ void invalidate_static_texture_cache() noexcept {
     s_textureObjectCaches.clear();
     s_tlutObjectCaches.clear();
     s_staticTextureSourceCache.clear();
+    clear_static_texture_content_cache();
     s_staticPaletteTextureSourceCache.clear();
     s_texObjSourceKeys.clear();
     s_texObjPaletteSourceKeys.clear();
@@ -2149,6 +2231,7 @@ void shutdown() noexcept {
   s_textureObjectCaches.clear();
   s_tlutObjectCaches.clear();
   s_staticTextureSourceCache.clear();
+  clear_static_texture_content_cache();
   s_staticPaletteTextureSourceCache.clear();
   s_texObjSourceKeys.clear();
   s_texObjPaletteSourceKeys.clear();
