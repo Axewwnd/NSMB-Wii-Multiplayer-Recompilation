@@ -13,6 +13,15 @@ void VI_HLE_ForceRetrace(CpuContext* ctx);
 void VI_HLE_PollRetrace(CpuContext* ctx);
 void VI_HLE_ProcessRetracesDeferred(int maxToProcess);
 void VI_HLE_WaitForNextRetracePoll();
+// NSMBW_LOG_FPS: the scheduler had no guest thread to run for this long (the fps log reports it;
+// this includes the audio DMA callbacks its idle loop runs).
+bool VI_HLE_IdleTimingEnabled();
+// `ender`: what made a thread runnable (0 sleep timer, 1 audio, 2 retrace, 3 fiber timer, 4 alarm,
+// 5 already pending); `thread`: the guest thread that had just stopped running.
+void VI_HLE_NoteSchedulerIdle(uint64_t nanos, int ender, uint32_t thread);
+// dMain::mainThread slept on `queue`, called from guest `lr`, for the same report.
+void VI_HLE_NoteMainThreadWait(uint32_t queue, uint32_t lr, uint64_t blockedNanos, uint64_t idleNanos);
+uint64_t VI_HLE_IdleNanosTotal();
 // Deterministic mode (det_clock.h): the virtual tick of the next VI retrace, DetClock::kNever
 // before VIInit.
 uint64_t VI_HLE_DetNextRetraceTicks();

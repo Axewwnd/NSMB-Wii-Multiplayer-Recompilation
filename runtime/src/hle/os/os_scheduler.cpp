@@ -14,6 +14,10 @@
 #include "runtime_log.h"
 #include "os_internal.h"
 
+#include <array>
+#include <chrono>
+#include <string>
+
 namespace {
 void LinkMutexToThread(uint32_t threadPtr, uint32_t mutexPtr)
 {
@@ -125,6 +129,14 @@ static void DeterministicIdleStep(CpuContext* cpu)
     }
     DetClock::PaceTo(next);
     DetClock::AdvanceTo(next);
+}
+
+// NSMBW_LOG_FPS: time in each step of the idle loop (sleep timers, audio, retrace, fiber timers,
+// alarms, waiting) and the number of passes; the scheduler's thread only.
+static std::array<uint64_t, 7> g_idleStepNanos{};
+void OS_HLE_TakeIdleSteps(uint64_t* out) {
+    for (size_t i = 0; i < g_idleStepNanos.size(); ++i) out[i] = g_idleStepNanos[i];
+    g_idleStepNanos.fill(0);
 }
 
 static void TryInvokeSwitchCallback(uint32_t oldCtx, uint32_t newCtx, CpuContext* cpu)
@@ -256,6 +268,9 @@ extern "C" void SelectThread_801a9c08(CpuContext* ctx)
         // Set current context to idle thread context
         OS__SetCurrentContext_801a1e70(kIdleThreadContextAddr);
         
+        const bool timeIdle = VI_HLE_IdleTimingEnabled();
+        const auto idleStart = timeIdle ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        int idleEnder = 5;
         while (true) {
             // Enable interrupts and idle until something becomes runnable.
             OS__EnableInterrupts_801a65c0();
@@ -265,24 +280,49 @@ extern "C" void SelectThread_801a9c08(CpuContext* ctx)
                     DeterministicIdleStep(cpu);
                     continue;
                 }
+                auto lapStart = timeIdle ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+                const auto lap = [&](int step) {
+                    if (!timeIdle) return;
+                    const auto t = std::chrono::steady_clock::now();
+                    g_idleStepNanos[step] += static_cast<uint64_t>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(t - lapStart).count());
+                    lapStart = t;
+                };
                 ProcessSleepTimers(cpu);
+                const auto noteEnder = [&](int ender) {
+                    if (timeIdle && idleEnder == 5 && ::Memory::Read32(kSchedulerPendingFlagAddr) != 0) {
+                        idleEnder = ender;
+                    }
+                };
+                lap(0);
+                noteEnder(0);
                 // Dolphin models DSP audio DMA as an independent 4 kHz timing
                 // event.  Poll it from the guest scheduler instead of batching
                 // completed 3 ms DMA blocks at VI retrace cadence.  A completed
                 // block wakes SoundThread and sets the scheduler pending mask.
                 Audio_HLE_Poll(cpu);
+                lap(1);
+                noteEnder(1);
                 if (::Memory::Read32(kSchedulerPendingFlagAddr) != 0) {
                     break;
                 }
                 VI_HLE_PollRetrace(cpu);
+                lap(2);
+                noteEnder(2);
                 if (Fiber::GuestFiberManager::IsInitialized()) {
                     Fiber::GuestFiberManager::ProcessTimerEvents(cpu);
                 }
+                lap(3);
+                noteEnder(3);
                 ProcessAlarmQueue(cpu, 8);
+                lap(4);
+                noteEnder(4);
                 if (::Memory::Read32(kSchedulerPendingFlagAddr) != 0) {
                     break;
                 }
                 VI_HLE_WaitForNextRetracePoll();
+                lap(5);
+                if (timeIdle) ++g_idleStepNanos[6];
             }
 
             OS__DisableInterrupts_801a65ac();
@@ -292,6 +332,10 @@ extern "C" void SelectThread_801a9c08(CpuContext* ctx)
             }
         }
 
+        if (timeIdle) {
+            VI_HLE_NoteSchedulerIdle(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - idleStart).count()), idleEnder, runningContext);
+        }
         OS__ClearContext_801a2098(kIdleThreadContextAddr);
     }
 

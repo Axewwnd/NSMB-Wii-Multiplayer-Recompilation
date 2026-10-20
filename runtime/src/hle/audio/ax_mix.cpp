@@ -28,9 +28,16 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#if defined(__linux__)
+#include <sched.h>
+#endif
 
 namespace AxDspHle {
 namespace {
+// NSMBW_LOG_FPS: the mix worker's time mixing, the guest's time waiting for it, and its last CPU.
+std::atomic<uint64_t> g_mixNanos{0}, g_mixWaitNanos{0};
+std::atomic<uint32_t> g_mixes{0};
+std::atomic<int> g_mixCpu{-1};
 
 std::filesystem::path FindDspCoefficientRom() {
     if (const auto executableDirectory = RuntimeConfigFile::ExecutableDirectory()) {
@@ -115,8 +122,11 @@ public:
 
     void JoinMix() {
         if (m_mixThread.joinable()) {
+            const auto start = std::chrono::steady_clock::now();
             std::unique_lock<std::mutex> lock(m_mixMutex);
             m_mixIdle.wait(lock, [this] { return !m_mixPending && !m_mixBusy; });
+            g_mixWaitNanos.fetch_add(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - start).count()), std::memory_order_relaxed);
         }
         PublishAuxOutputs();
     }
@@ -1464,6 +1474,7 @@ private:
                 m_mixBusy = true;
             }
 
+            const auto mixStart = std::chrono::steady_clock::now();
             try {
                 ExecuteCommandList(m_mixLayout, m_mixCmdListSize);
             } catch (const std::exception& error) {
@@ -1472,6 +1483,12 @@ private:
                 ReportMixWorkerFailure("unknown exception");
             }
 
+            g_mixNanos.fetch_add(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - mixStart).count()), std::memory_order_relaxed);
+            g_mixes.fetch_add(1, std::memory_order_relaxed);
+#if defined(__linux__)
+            g_mixCpu.store(sched_getcpu(), std::memory_order_relaxed);
+#endif
             {
                 std::lock_guard<std::mutex> lock(m_mixMutex);
                 m_mixBusy = false;
@@ -1672,6 +1689,13 @@ const uint8_t* SpeakerBlock(uint32_t addr, uint32_t bytes) {
 
 void JoinMixWorker() {
     Instance().JoinMix();
+}
+
+void TakeMixStats(uint64_t* mixNanos, uint64_t* waitNanos, uint32_t* mixes, int* lastCpu) {
+    *mixNanos = g_mixNanos.exchange(0, std::memory_order_relaxed);
+    *waitNanos = g_mixWaitNanos.exchange(0, std::memory_order_relaxed);
+    *mixes = g_mixes.exchange(0, std::memory_order_relaxed);
+    *lastCpu = g_mixCpu.load(std::memory_order_relaxed);
 }
 
 void ShutdownMixWorker() {

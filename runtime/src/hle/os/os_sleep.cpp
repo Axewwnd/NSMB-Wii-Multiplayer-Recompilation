@@ -478,9 +478,22 @@ extern "C" void OSSleepThread_HLE_801aa9b8(CpuContext* ctx)
         // Set reschedule flag and switch threads
         ::Memory::Write32(kSchedulerReschedCounterAddr, 1);
         
+        // NSMBW_LOG_FPS: what dMain::mainThread sleeps on, from where, and for how long.
+        const bool timeMain = currentThread == 0x80359938u && VI_HLE_IdleTimingEnabled();
+        const uint32_t sleepLr = cpu->lr;
+        const auto sleepStart = timeMain ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        const uint64_t idleBefore = timeMain ? VI_HLE_IdleNanosTotal() : 0;
+
         // Match the original SDK behavior: sleep yields via SelectThread(0).
         cpu->gpr[3] = 0;
         SelectThread_801a9c08(cpu);
+
+        if (timeMain) {
+            VI_HLE_NoteMainThreadWait(queuePtr, sleepLr,
+                                      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                          std::chrono::steady_clock::now() - sleepStart).count()),
+                                      VI_HLE_IdleNanosTotal() - idleBefore);
+        }
 
         // Defence in depth: SelectThread has other paths that return without switching (context
         // mismatch, uninitialised thread system, a run queue that drained mid-enqueue). None of

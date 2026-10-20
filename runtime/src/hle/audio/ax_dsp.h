@@ -24,6 +24,9 @@ void ServiceDeferredCallbacks();
 // runs __AXOutNewFrame, the two places guest code reads the mix's PB/output/aux data.
 // Cheap when the mix already finished (the normal case).
 void JoinMixWorker();
+// NSMBW_LOG_FPS: since the last call, time spent mixing on the worker, time the guest waited for it,
+// the number of mixes, and the CPU the last one ran on (-1 if unknown).
+void TakeMixStats(uint64_t* mixNanos, uint64_t* waitNanos, uint32_t* mixes, int* lastCpu);
 
 // Joins and tears down the mix worker thread. Call before the guest memory map
 // is destroyed or re-created.

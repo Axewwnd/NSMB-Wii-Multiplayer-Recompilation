@@ -771,6 +771,11 @@ void SetRuntimeExitCodeImpl(int code) {
 
 } // namespace
 
+// This run's log folder, for other runtime files that write next to console.log (guest_profiler.cpp).
+std::filesystem::path RuntimeRunLogDirectory() {
+    return GetRunLogDirectory();
+}
+
 namespace {
 
 void DumpHostStackTrace() {
@@ -1457,6 +1462,17 @@ int RuntimeMain(int argc, char** argv) {
             }
             if (const std::string session = property("debug.nsmbw.sscript"); !session.empty()) {
                 setenv("NSMBW_SESSION_SCRIPT", session.c_str(), 1);
+            }
+            // Any other variable for an experiment: debug.nsmbw.env = "NAME=value;NAME=value".
+            const std::string extra = property("debug.nsmbw.env");
+            for (size_t start = 0; start < extra.size();) {
+                size_t end = extra.find(';', start);
+                if (end == std::string::npos) end = extra.size();
+                const std::string item = extra.substr(start, end - start);
+                if (const size_t eq = item.find('='); eq != std::string::npos && eq > 0) {
+                    setenv(item.substr(0, eq).c_str(), item.substr(eq + 1).c_str(), 1);
+                }
+                start = end + 1;
             }
         }
 #endif

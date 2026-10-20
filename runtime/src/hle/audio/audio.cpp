@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -390,6 +391,17 @@ PPC_NATIVE_OVERRIDE(801D5880, DSPAssertTask_8015d57c, uint32_t, (uint32_t taskPt
 
 // Each delivered block runs the AI DMA callback and deferred AX task callbacks before the
 // next block, preserving the SoundThread/DSP interleave order real hardware provides.
+// NSMBW_LOG_FPS: time in the speaker push and in the AI DMA callback (guest AX code), and blocks.
+std::atomic<uint64_t> g_tickPushNanos{0}, g_tickCallbackNanos{0};
+std::atomic<uint32_t> g_tickBlocks{0};
+
+void Audio_HLE_TakeTickStats(uint64_t* pushNanos, uint64_t* callbackNanos, uint32_t* blocks)
+{
+    *pushNanos = g_tickPushNanos.exchange(0, std::memory_order_relaxed);
+    *callbackNanos = g_tickCallbackNanos.exchange(0, std::memory_order_relaxed);
+    *blocks = g_tickBlocks.exchange(0, std::memory_order_relaxed);
+}
+
 void Audio_HLE_Tick(CpuContext* ctx, uint32_t deltaMicros)
 {
     uint32_t startAddr = 0;
@@ -470,7 +482,10 @@ void Audio_HLE_Tick(CpuContext* ctx, uint32_t deltaMicros)
                 ReportAudioProblem("Audio", "audio backend unavailable; dropping samples");
             }
         } else {
+            const auto pushStart = std::chrono::steady_clock::now();
             const bool pushed = PushAudioBlock(startAddr, length);
+            g_tickPushNanos.fetch_add(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - pushStart).count()), std::memory_order_relaxed);
             if (!pushed) {
                 std::lock_guard<std::mutex> lock(g_ai.mutex);
                 if (!g_ai.loggedAccessFailure) {
@@ -492,12 +507,16 @@ void Audio_HLE_Tick(CpuContext* ctx, uint32_t deltaMicros)
                     ReportAudioProblem("Audio", "AI DMA callback not registered; skipping");
                 }
             } else {
+                const auto callbackStart = std::chrono::steady_clock::now();
                 Memory::TryWrite32(kAICallbackBusyAddr, 1);
                 InvokeIndirectCpu(callback, cpu);
                 Memory::TryWrite32(kAICallbackBusyAddr, 0);
                 AxDspHle::ServiceDeferredCallbacks();
+                g_tickCallbackNanos.fetch_add(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - callbackStart).count()), std::memory_order_relaxed);
             }
         }
+        g_tickBlocks.fetch_add(1, std::memory_order_relaxed);
 
         {
             std::lock_guard<std::mutex> lock(g_ai.mutex);
