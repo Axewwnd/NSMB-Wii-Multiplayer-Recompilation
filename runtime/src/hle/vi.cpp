@@ -957,6 +957,13 @@ uint64_t VI_HLE_IdleNanosTotal() {
     return g_idleNanosTotal.load(std::memory_order_relaxed);
 }
 
+// The display's refresh period while V-Sync has the game's clock locked to it, else 0: the
+// frametime graph shows frame times in whole refreshes then (settings_overlay.cpp).
+double VI_HLE_LockedDisplayPeriodMs() {
+    std::lock_guard<std::mutex> lock(g_viMutex);
+    return g_displayLock.valid ? std::chrono::duration<double, std::milli>(g_displayLock.period).count() : 0.0;
+}
+
 void VI_HLE_NoteMainThreadWait(uint32_t queue, uint32_t lr, uint64_t blockedNanos, uint64_t idleNanos) {
     MainWait& wait = g_mainWaits[(uint64_t{queue} << 32) | lr];
     wait.blocked += blockedNanos;

@@ -48,6 +48,8 @@
 #include <shellapi.h>
 #endif
 
+double VI_HLE_LockedDisplayPeriodMs();  // vi.cpp
+
 #include <dolphin/pad.h>
 
 extern "C" void PAD_HLE_SetRumbleEnabled(bool enabled);
@@ -1272,7 +1274,15 @@ void DrawFpsOverlay() {
     AuroraPresentTiming presentTiming{};
     aurora_get_present_timing(&presentTiming);
     {
-        const float dt = ImGui::GetIO().DeltaTime;
+        float dt = ImGui::GetIO().DeltaTime;
+        // With V-Sync locked to the display, frames queue ahead of it and each one is shown for a
+        // whole number of refreshes: this thread waking a millisecond or two late or early changes
+        // nothing on screen, so the graph shows the refreshes a frame was up for (one 18 ms wake-up
+        // is 16.7 ms; a frame held for two refreshes is 33.3 ms, as on the display).
+        if (const double period = VI_HLE_LockedDisplayPeriodMs(); period > 0.0 && dt > 0.0f && dt < 1.0f) {
+            const double refreshes = std::max(1.0, std::round(dt * 1000.0 / period));
+            dt = static_cast<float>(refreshes * period / 1000.0);
+        }
         g_frameTimes[g_frameTimeNext] = dt > 0.0f && dt < 1.0f ? dt * 1000.0f : 0.0f;
         g_frameTimeNext = (g_frameTimeNext + 1) % kFrameTimeCount;
         // NSMBW_LOG_FPS: what the graph shows, every 2 s: the presented frames' times, which can be
