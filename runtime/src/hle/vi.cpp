@@ -38,6 +38,9 @@
 #endif
 #include <windows.h>
 #include <dwmapi.h>
+#elif defined(__ANDROID__)
+#include <android/choreographer.h>
+#include <android/looper.h>
 #endif
 
 #include <aurora/aurora.h>
@@ -188,6 +191,73 @@ struct DisplayLock {
 };
 DisplayLock g_displayLock;  // under g_viMutex
 
+#if defined(__ANDROID__)
+// The display's vsync on Android, from the Choreographer: a thread of its own with a looper takes
+// every frame callback (the vsync's CLOCK_MONOTONIC time, steady_clock's clock on Android) and the
+// refresh period. Started the first time V-Sync asks for it, then runs for the process's life.
+namespace AndroidVsync {
+std::atomic<int64_t> g_lastVsync{0};
+std::atomic<int64_t> g_period{0};         // from the refresh rate callback
+std::atomic<int64_t> g_measuredPeriod{0}; // the shortest recent gap between callbacks, until then
+int64_t g_previous = 0;
+int64_t g_shortest = 0;
+int g_gaps = 0;
+
+void OnFrame(int64_t frameTimeNanos, void* data) {
+    auto* choreographer = static_cast<AChoreographer*>(data);
+    g_lastVsync.store(frameTimeNanos, std::memory_order_release);
+    // Callbacks can skip vsyncs but never come closer together than one, so the shortest gap of a
+    // batch is the period.
+    if (g_previous != 0) {
+        const int64_t gap = frameTimeNanos - g_previous;
+        if (gap > 2'000'000 && (g_shortest == 0 || gap < g_shortest)) {
+            g_shortest = gap;
+        }
+        if (++g_gaps == 32) {
+            g_measuredPeriod.store(g_shortest, std::memory_order_release);
+            g_gaps = 0;
+            g_shortest = 0;
+        }
+    }
+    g_previous = frameTimeNanos;
+    AChoreographer_postFrameCallback64(choreographer, OnFrame, choreographer);
+}
+
+void OnRefreshRate(int64_t vsyncPeriodNanos, void*) {
+    g_period.store(vsyncPeriodNanos, std::memory_order_release);
+}
+
+void Start() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        std::thread([] {
+            ALooper_prepare(0);
+            AChoreographer* choreographer = AChoreographer_getInstance();
+            if (choreographer == nullptr) {
+                return;
+            }
+            AChoreographer_registerRefreshRateCallback(choreographer, OnRefreshRate, nullptr);
+            AChoreographer_postFrameCallback64(choreographer, OnFrame, choreographer);
+            while (true) {
+                ALooper_pollOnce(-1, nullptr, nullptr, nullptr);
+            }
+        }).detach();
+    });
+}
+
+// The display period and the time of a recent vsync, once both are known.
+bool Timing(int64_t* period, int64_t* vsync) {
+    Start();
+    *vsync = g_lastVsync.load(std::memory_order_acquire);
+    *period = g_period.load(std::memory_order_acquire);
+    if (*period <= 0) {
+        *period = g_measuredPeriod.load(std::memory_order_acquire);
+    }
+    return *vsync != 0 && *period > 0;
+}
+} // namespace AndroidVsync
+#endif
+
 void RefreshDisplayLockLocked(Clock::time_point now) {
     DisplayLock& d = g_displayLock;
     if (!settings_overlay::VSync()) {
@@ -237,6 +307,27 @@ void RefreshDisplayLockLocked(Clock::time_point now) {
                 d.valid ? (std::string("game clock locked at ") + std::to_string(k) + " refresh(es) per frame").c_str()
                         : "no whole fraction near 60 Hz; the game keeps its own clock");
     }
+#elif defined(__ANDROID__)
+    int64_t periodNanos = 0, vsyncNanos = 0;
+    if (!AndroidVsync::Timing(&periodNanos, &vsyncNanos)) {
+        d.valid = false;  // the Choreographer's first callbacks are still to come
+        return;
+    }
+    const auto period = std::chrono::nanoseconds(periodNanos);
+    const double hz = 1e9 / static_cast<double>(periodNanos);
+    const int k = static_cast<int>(std::lround(hz / 60.0));
+    const bool valid = k >= 1 && k <= 8 && std::fabs(hz / k - 60.0) < 60.0 * 0.02;
+    // A display that changes its rate (a 120 Hz phone settling on 60) is logged again.
+    if (!d.logged || valid != d.valid || k != d.k) {
+        d.logged = true;
+        RT_LOGF(RT_TAG_VI, "V-Sync: display %.3f Hz, %s\n", hz,
+                valid ? (std::string("game clock locked at ") + std::to_string(k) + " refresh(es) per frame").c_str()
+                      : "no whole fraction near 60 Hz; the game keeps its own clock");
+    }
+    d.valid = valid;
+    d.k = k;
+    d.period = period;
+    d.vblank = Clock::time_point(std::chrono::nanoseconds(vsyncNanos));
 #else
     d.valid = false;
 #endif

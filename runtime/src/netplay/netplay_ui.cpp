@@ -1010,9 +1010,10 @@ bool g_lastWide = true;
 // Cursor rows. Video: 0 tabs, 1 resolution, 2 match screen, 3 fullscreen, then FPS, frametime
 // graph, spinning coins, V-Sync and OK. Keybinds: 0 tabs, 1-12 the controls (two columns of six),
 // 13 Reset Defaults, 14 OK.
-// V-Sync is a Windows row: the Android app owns [video] in Config.toml, and phones present through
-// Mailbox (no tearing) anyway. Fullscreen is a desktop row: a phone is always fullscreen.
-#if defined(_WIN32)
+// V-Sync is a Windows and Android row (both can lock the game's clock to the display; on Android the
+// app keeps the choice through TakeSettingsChange). Fullscreen is a desktop row: a phone is always
+// fullscreen.
+#if defined(_WIN32) || defined(__ANDROID__)
 constexpr bool kVSyncRow = true;
 #else
 constexpr bool kVSyncRow = false;
@@ -1431,6 +1432,7 @@ void HandleSettings(bool left, bool right, bool up, bool down, bool confirm, boo
             g_settingsChanged = true;
         } else if (confirm && cursor == kVideoVSync) {
             settings_overlay::SetVSync(!settings_overlay::VSync());
+            g_settingsChanged = true;
         } else if (confirm && cursor == kVideoCoins) {
             settings_overlay::SetSpinningCoins(!settings_overlay::SpinningCoins());
             g_settingsChanged = true;
@@ -1924,7 +1926,8 @@ bool TapScreenUp() {
     return g_tapScreen.load(std::memory_order_acquire);
 }
 
-bool TakeSettingsChange(float& renderScale, bool& showFps, int& aspect, bool& spinningCoins, bool& frameGraph) {
+bool TakeSettingsChange(float& renderScale, bool& showFps, int& aspect, bool& spinningCoins, bool& frameGraph,
+                        bool& vsync) {
     if (!g_settingsChanged.exchange(false)) {
         return false;
     }
@@ -1933,6 +1936,7 @@ bool TakeSettingsChange(float& renderScale, bool& showFps, int& aspect, bool& sp
     aspect = settings_overlay::Aspect();
     spinningCoins = settings_overlay::SpinningCoins();
     frameGraph = settings_overlay::FrameGraph();
+    vsync = settings_overlay::VSync();
     return true;
 }
 
