@@ -1,11 +1,13 @@
 #include "gx_guest_write.h"
 
+#include "det_clock.h"
 #include "memory.h"
 #include "runtime_log.h"
 
 #include <aurora/gfx.h>
 
 #include <array>
+#include <cstdlib>
 #include <cstdio>
 
 namespace GxGuestWrite {
@@ -66,6 +68,9 @@ GuestRamAlias ResolveAlias(uint32_t guestBase, size_t size) noexcept {
 } // namespace
 
 void InstallAuroraHooks() {
+    if (DetClock::Enabled() || std::getenv("NSMBW_NO_COUCH_FASTPATHS") != nullptr) {
+        UseCoarseGranules();  // lockstep play keeps the tracking it was verified with
+    }
     g_aliases[0] = ResolveAlias(Memory::kMem1CachedBase, Memory::kMem1Size);
     g_aliases[1] = ResolveAlias(Memory::kMem2CachedBase, Memory::kMem2Size);
     if (g_aliases[0].hostBase == nullptr || g_aliases[1].hostBase == nullptr) {

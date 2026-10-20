@@ -374,12 +374,28 @@ public:
     // This enables stack trace symbolication for translated functions.
     static std::optional<TranslatedFunctionInfo> FindByHostAddress(uintptr_t hostAddr);
 
+    // Sends indirect calls (bctrl) to `record->address` to `record->entry` instead of the
+    // translated function there, decided at runtime rather than at translation: the couch-play
+    // native reverb (hle/audio/axfx_reverb_native.cpp). Install before guest code runs; checked
+    // only on a memo miss, so it costs nothing per call. Direct calls are not redirected.
+    static void SetRuntimeRedirect(const RawDispatchRecord* record) noexcept {
+        if (runtimeRedirectCount_ < kMaxRuntimeRedirects) {
+            runtimeRedirects_[runtimeRedirectCount_++] = record;
+        }
+    }
+
 private:
     // Memo miss: resolve against the header-inline generated table first; only dynamically
     // registered records or a not-yet-published table fall through to the slow path.
     static MKW_PPC_NO_INLINE MKW_PPC_COLD const RawDispatchRecord* FindRawByAddressPtrMiss(
         uint32_t address, IndirectRawDispatchMemoEntry& cached) {
         const RawDispatchRecord* record = nullptr;
+        for (size_t i = 0; i < runtimeRedirectCount_; ++i) {
+            if (runtimeRedirects_[i]->address == address) {
+                cached = {true, address, runtimeRedirects_[i]};
+                return runtimeRedirects_[i];
+            }
+        }
         if (const auto* table =
                 g_publishedStaticIndirectDispatchTable.load(std::memory_order_acquire)) {
             record = FindStaticIndirectDispatchEntry(table, address);
@@ -398,6 +414,9 @@ private:
     // dispatch storage. Header-inlined cache hits are enabled only after that
     // release publication, so a pre-finalization miss can never poison them.
     inline static std::atomic_bool lookupPublished_{false};
+    static constexpr size_t kMaxRuntimeRedirects = 4;
+    inline static const RawDispatchRecord* runtimeRedirects_[kMaxRuntimeRedirects]{};
+    inline static size_t runtimeRedirectCount_ = 0;
 };
 
 // Cold, profile-owned registration data is emitted in compact table shards.

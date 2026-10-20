@@ -71,6 +71,7 @@
 #include "abi_bridge.h"
 #include "guest_flat_memory.h"
 #include "gx_guest_write.h"
+#include "hle/audio/axfx_reverb_native.h"
 #include "memory.h"
 #include "system_bridge.h"
 #include "ppc_runtime.h"
@@ -1652,6 +1653,7 @@ int RuntimeMain(int argc, char** argv) {
                   << (auroraInfo.gpuCompatActive ? "on" : "off") << std::endl;
         aurora_set_frame_worker_wait_callback(ServiceGuestTimingDuringAuroraFrameWait);
         GxGuestWrite::InstallAuroraHooks();
+        AxfxReverbNative::Install();
         DisplaySettings::OnFrameBoundary(auroraInfo.windowSize.native_fb_width,
                                          auroraInfo.windowSize.native_fb_height);
         settings_overlay::InitializeRuntimeSettings();
