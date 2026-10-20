@@ -135,6 +135,7 @@ final class AppFiles {
                 + "show_fps = " + settings.showFps() + "\n"
                 + "spinning_coins = " + settings.spinningCoins() + "\n"
                 + "frame_graph = " + settings.frameGraph() + "\n"
+                + "vsync = " + settings.vsync() + "\n"
                 + "texture_replacements = false\n"
                 + "texture_dumps = false\n"
                 + (hasTable(config, "audio") ? "" : "\n[audio]\n"

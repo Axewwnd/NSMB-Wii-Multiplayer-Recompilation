@@ -53,6 +53,7 @@ final class SettingsMenu {
             "FPS Counter: " + (settings.showFps() ? "On" : "Off"),
             "Frametime Graph: " + (settings.frameGraph() ? "On" : "Off"),
             "Spinning Coins: " + (settings.spinningCoins() ? "On" : "Off"),
+            "V-Sync: " + (settings.vsync() ? "On" : "Off"),
             "Graphics Compatibility: " + gpuCompatLabel(settings.gpuCompat()),
         };
         new AlertDialog.Builder(activity)
@@ -63,6 +64,7 @@ final class SettingsMenu {
                     else if (which == 2) { settings.setShowFps(!settings.showFps()); save(); showDisplayMenu(); }
                     else if (which == 3) { settings.setFrameGraph(!settings.frameGraph()); save(); showDisplayMenu(); }
                     else if (which == 4) { settings.setSpinningCoins(!settings.spinningCoins()); save(); showDisplayMenu(); }
+                    else if (which == 5) { settings.setVSync(!settings.vsync()); save(); showDisplayMenu(); }
                     else showGpuCompatChoice();
                 })
                 .setNegativeButton("Back", (dialog, which) -> showMain())

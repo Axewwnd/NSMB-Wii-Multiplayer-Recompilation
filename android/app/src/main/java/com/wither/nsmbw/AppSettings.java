@@ -47,6 +47,10 @@ final class AppSettings {
     boolean frameGraph() { return prefs.getBoolean("frame_graph", false); }
     void setFrameGraph(boolean on) { prefs.edit().putBoolean("frame_graph", on).commit(); }
 
+    /** V-Sync: frames go out in step with the display and the game's clock follows its vsync. */
+    boolean vsync() { return prefs.getBoolean("vsync", true); }
+    void setVSync(boolean on) { prefs.edit().putBoolean("vsync", on).commit(); }
+
     boolean touchControls() { return prefs.getBoolean("touch_controls", true); }
     void setTouchControls(boolean on) { prefs.edit().putBoolean("touch_controls", on).commit(); }
 
