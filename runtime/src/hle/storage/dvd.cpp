@@ -20,6 +20,11 @@ extern "C" void GxNotifyGuestRamDmaWrite(uint32_t addr, uint32_t size);
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#elif defined(__ANDROID__)
+#include <fcntl.h>
+#include <sys/resource.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 #include <cstdint>
 #include <cstdlib>
@@ -103,8 +108,11 @@ static std::vector<DVDFileEntry> g_fileEntries;
 // one host thread every guest thread shares, so a slow read stalls the frame. Each read used to open
 // the file again, which on a busy PC (antivirus and sync filters, a hard disk) took long enough to
 // drop frames during play. On Windows the whole disc (about 340 MB) is read into memory once, on a
-// background thread at the lowest I/O priority, and reads are then served from it. Phones keep
-// reading from flash, which is fast and has less memory to spare.
+// background thread at the lowest I/O priority, and reads are then served from it. Android does the
+// same on phones with 3 GB of RAM or more (the game itself takes under 1 GB): there the game files
+// sit in the app's shared storage, where every open goes through FUSE, and a scene change's reads
+// cost 30-110 ms of its load frame on a Pixel 3 XL. Until the cache has a file, Android reads it
+// with pread on a descriptor kept open, so a file is opened once rather than on every read.
 namespace {
 
 using FileBytes = std::shared_ptr<const std::vector<uint8_t>>;
@@ -118,6 +126,73 @@ FileBytes CachedFile(const fs::path& path) {
     const auto it = g_readCache.find(path.native());
     return it != g_readCache.end() ? it->second : nullptr;
 }
+
+#if defined(__ANDROID__)
+// Files the game has read, kept open (with their sizes), so the next read of one skips the open.
+struct OpenFile {
+    int fd = -1;
+    uint64_t size = 0;
+    uint64_t lastUse = 0;
+};
+std::mutex g_openFilesMutex;
+std::unordered_map<fs::path::string_type, OpenFile> g_openFiles;
+uint64_t g_openFilesClock = 0;
+constexpr size_t kMaxOpenFiles = 96;
+
+// ReadExact's contract (whole range or a failure saying why) with pread on a kept descriptor.
+bool ReadWithOpenFile(const fs::path& path, uint64_t offset, uint32_t length, std::vector<uint8_t>& destination,
+                      DvdReadContract::HostReadFailure& failure) {
+    failure = DvdReadContract::HostReadFailure::None;
+    OpenFile file;
+    {
+        std::lock_guard lock(g_openFilesMutex);
+        if (auto it = g_openFiles.find(path.native()); it != g_openFiles.end()) {
+            it->second.lastUse = ++g_openFilesClock;
+            file = it->second;
+        } else {
+            const int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+            struct stat st {};
+            if (fd < 0 || ::fstat(fd, &st) != 0) {
+                if (fd >= 0) ::close(fd);
+                failure = DvdReadContract::HostReadFailure::MissingFile;
+                return false;
+            }
+            if (g_openFiles.size() >= kMaxOpenFiles) {
+                auto oldest = g_openFiles.begin();
+                for (auto i = g_openFiles.begin(); i != g_openFiles.end(); ++i) {
+                    if (i->second.lastUse < oldest->second.lastUse) oldest = i;
+                }
+                ::close(oldest->second.fd);
+                g_openFiles.erase(oldest);
+            }
+            file = {fd, static_cast<uint64_t>(st.st_size), ++g_openFilesClock};
+            g_openFiles.emplace(path.native(), file);
+        }
+        // The read stays under the lock: the preload thread never closes descriptors, but a later
+        // read evicting this one could.
+        if (offset >= file.size) {
+            failure = DvdReadContract::HostReadFailure::BadOffset;
+            return false;
+        }
+        if (length > file.size - offset) {
+            failure = DvdReadContract::HostReadFailure::ShortRead;
+            return false;
+        }
+        destination.resize(length);
+        uint64_t done = 0;
+        while (done < length) {
+            const ssize_t got = ::pread(file.fd, destination.data() + done, length - done,
+                                        static_cast<off_t>(offset + done));
+            if (got <= 0) {
+                failure = DvdReadContract::HostReadFailure::ShortRead;
+                return false;
+            }
+            done += static_cast<uint64_t>(got);
+        }
+    }
+    return true;
+}
+#endif
 
 bool ReadHostFile(const fs::path& path, uint64_t offset, uint32_t length, std::vector<uint8_t>& destination,
                   DvdReadContract::HostReadFailure& failure) {
@@ -135,7 +210,11 @@ bool ReadHostFile(const fs::path& path, uint64_t offset, uint32_t length, std::v
             ok = true;
         }
     } else {
+#if defined(__ANDROID__)
+        ok = ReadWithOpenFile(path, offset, length, destination, failure);
+#else
         ok = DvdReadContract::ReadExact(path, offset, length, destination, failure);
+#endif
     }
     g_dvdReadNanos.fetch_add(static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                                        std::chrono::steady_clock::now() - start)
@@ -146,7 +225,14 @@ bool ReadHostFile(const fs::path& path, uint64_t offset, uint32_t length, std::v
 }
 
 void StartReadCachePreload() {
-#if defined(_WIN32)
+#if defined(__ANDROID__)
+    const uint64_t ram = static_cast<uint64_t>(sysconf(_SC_PHYS_PAGES)) * static_cast<uint64_t>(sysconf(_SC_PAGE_SIZE));
+    if (ram < (3ull << 30) || std::getenv("NSMBW_NO_DVD_PRELOAD") != nullptr) {
+        RT_LOGF(RT_TAG_DVD, "read cache: off (%llu MiB of RAM)\n", static_cast<unsigned long long>(ram >> 20));
+        return;
+    }
+#endif
+#if defined(_WIN32) || defined(__ANDROID__)
     constexpr uint64_t kCacheLimitBytes = 1ull << 30;  // mods can be larger than the disc; stop at 1 GiB
     std::vector<fs::path> paths;
     for (const DVDFileEntry& entry : g_fileEntries) {
@@ -155,7 +241,11 @@ void StartReadCachePreload() {
         }
     }
     std::thread([paths = std::move(paths)] {
+#if defined(_WIN32)
         ::SetThreadPriority(::GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
+#else
+        setpriority(PRIO_PROCESS, static_cast<id_t>(gettid()), 19);  // the lowest: never ahead of the game
+#endif
         const auto start = std::chrono::steady_clock::now();
         uint64_t total = 0;
         size_t files = 0;
@@ -177,7 +267,9 @@ void StartReadCachePreload() {
             total += size;
             ++files;
         }
+#if defined(_WIN32)
         ::SetThreadPriority(::GetCurrentThread(), THREAD_MODE_BACKGROUND_END);
+#endif
         RT_LOG(RT_TAG_DVD) << "read cache: " << files << " file(s), " << (total >> 20) << " MiB in "
                            << std::chrono::duration_cast<std::chrono::milliseconds>(
                                   std::chrono::steady_clock::now() - start)
