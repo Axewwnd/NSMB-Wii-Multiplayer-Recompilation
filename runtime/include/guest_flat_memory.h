@@ -80,7 +80,10 @@ bool IsActive();
 #if defined(MKW_GUEST_FLAT_FIXED_PAGE_SIZE)
 inline constexpr bool RequiresCheckedAccess() noexcept { return false; }
 #else
-extern bool g_requiresCheckedAccess;
+// Const, set from the page size while the library initializes: a store through a flat guest pointer
+// (a memcpy, which may alias any object) cannot change it, so the compiler loads it once per
+// function instead of again after every guest store.
+extern const bool g_requiresCheckedAccess;
 inline bool RequiresCheckedAccess() noexcept { return g_requiresCheckedAccess; }
 #endif
 

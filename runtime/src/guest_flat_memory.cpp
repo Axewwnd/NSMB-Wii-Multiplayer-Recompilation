@@ -37,7 +37,11 @@
 
 namespace GuestFlat {
 #if !defined(MKW_GUEST_FLAT_FIXED_PAGE_SIZE)
-bool g_requiresCheckedAccess = false;
+// A host page larger than a Wii page can't carry per-Wii-page protection (see the header).
+extern const bool g_requiresCheckedAccess = [] {
+    const long size = sysconf(_SC_PAGESIZE);
+    return size > 0 && static_cast<size_t>(size) > kGuestPageSize;
+}();
 #endif
 namespace {
 
@@ -509,10 +513,6 @@ bool IsActive() {
 
 void Initialize(const std::vector<RegionRequest>& regions) {
     std::lock_guard<std::mutex> lock(StateMutex());
-
-#if !defined(MKW_GUEST_FLAT_FIXED_PAGE_SIZE)
-    g_requiresCheckedAccess = HostPageSize() > kGuestPageSize;
-#endif
 
     if (g_initialized) {
         if (!SameLayout(g_activeRegions, regions)) {

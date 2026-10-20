@@ -28,6 +28,9 @@
 #endif
 
 #include <atomic>
+#if defined(__linux__)
+#include <pthread.h>
+#endif
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -302,6 +305,10 @@ void frame_worker_main() noexcept {
     std::lock_guard lock(g_frameWorker.mutex);
     g_frameWorker.threadId = std::this_thread::get_id();
   }
+#if defined(__linux__)
+  // Named for profilers and /proc (NSMBW_PROFILE_THREAD=FrameWorker samples this thread).
+  pthread_setname_np(pthread_self(), "FrameWorker");
+#endif
 
 #ifdef AURORA_ENABLE_GX
   // Owned by the worker for its whole lifetime so the sealed pass vector and
@@ -1814,7 +1821,12 @@ bool run_frame_worker_cycle(gfx::SealedFrame& sealedFrame) noexcept {
     std::lock_guard gpuLock(g_rendererGpuMutex);
     seal_frame_locked(sealedFrame, ctx);
     sealed = WorkerClock::now();
-    overlapEncode = ctx.interpolationActive;
+    // NSMBW: overlap the encode with the producer's next frame without interpolation too. Encoding
+    // and submitting in the SEALED phase made the producer's first drain of every frame (EGG's
+    // GXDrawDone) wait out the whole encode: a quarter of the game thread's time on a Pixel 3 XL.
+    // NSMBW_SERIAL_ENCODE=1 restores the serial order.
+    static const bool serialEncode = std::getenv("NSMBW_SERIAL_ENCODE") != nullptr;
+    overlapEncode = ctx.interpolationActive || !serialEncode;
     if (!overlapEncode) {
       presentationJobs = encode_sealed_frame(sealedFrame, ctx);
     }

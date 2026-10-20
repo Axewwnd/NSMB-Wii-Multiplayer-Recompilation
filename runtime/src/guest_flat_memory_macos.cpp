@@ -13,7 +13,7 @@
 #include <vector>
 
 namespace GuestFlat {
-bool g_requiresCheckedAccess = false;
+extern const bool g_requiresCheckedAccess = static_cast<size_t>(getpagesize()) > kGuestPageSize;
 namespace {
 struct Mapping { uint32_t base; uint64_t size; uint8_t* host; };
 std::mutex g_mutex;
@@ -42,7 +42,6 @@ int BackingFile(size_t size) {
 bool IsActive() { return g_active; }
 void Initialize(const std::vector<RegionRequest>& regions) {
     std::lock_guard lock(g_mutex);
-    g_requiresCheckedAccess = static_cast<size_t>(getpagesize()) > kGuestPageSize;
     if (g_active) { if (!Same(g_layout, regions)) throw std::runtime_error("flat guest layout cannot be remapped"); return; }
     mach_vm_address_t address = kFixedFlatGuestBase;
     if (mach_vm_allocate(mach_task_self(), &address, kGuestSpaceSize, VM_FLAGS_FIXED) != KERN_SUCCESS || address != kFixedFlatGuestBase)
