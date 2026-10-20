@@ -1,49 +1,48 @@
-name: Install / update problem
-description: Installing or updating WiiCompiled through WheelWizard fails, or the game won't launch at all after installing.
-title: "[Install] "
+name: Setup problem
+description: Installing, importing the game files, or starting the game for the first time doesn't work.
+title: "[Setup] "
 labels: ["setup"]
 body:
   - type: markdown
     attributes:
       value: |
-        **Where to find the setup log** (same place whether you installed through WheelWizard or the setup exe):
-        - Press `Win+R`, type `%TEMP%` and press Enter, then find `WiiCompiled-setup.log` and attach it below.
+        Please check [Getting the game files](https://github.com/WitherBlitz/NSMB-Wii-Multiplayer-Recompilation#getting-the-game-files) first: most setup problems are a different region or revision of the game, or a disc image instead of the extracted folder.
 
-        If the install finished but the game won't start, also grab `console.log` from the newest folder in:
-        - WheelWizard: `%APPDATA%\CT-MKWII\Recomp\UserData\Logs`
-        - Standalone setup exe: `%LOCALAPPDATA%\WiiCompiled\Logs`
+        If the game starts but stops early, attach `console.log` from the newest folder in:
+        - **Windows:** `Documents\MarioWiiSaveData\Logs`
+        - **Linux:** `~/.local/share/WiiCompiled/Logs`
+        - **Android:** `Android/data/com.wither.nsmbw/files/Logs` (connect the phone to a computer with a USB cable)
   - type: checkboxes
     id: preflight
     attributes:
       label: Before you continue
       options:
-        - label: I'm on the latest version (latest WheelWizard, or the latest `MarioKartWiiCompiled-Setup.exe` from the Releases page).
+        - label: I'm on the latest release.
           required: true
         - label: I searched the existing issues and nobody has reported this yet.
           required: true
-        - label: I have a legally obtained copy of the game and it works in Dolphin.
+        - label: My game is New Super Mario Bros. Wii, USA (SMNE01), revision 1, extracted with Dolphin's Extract Entire Disc.
           required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Android
+        - Windows
+        - Linux
+    validations:
+      required: true
   - type: dropdown
     id: stage
     attributes:
       label: Where does it go wrong?
       options:
-        - Starting the install from WheelWizard
-        - Selecting the game file (ISO/WBFS/RVZ rejected)
-        - During compilation / translation
-        - Install finishes but the game won't launch
-        - Updating an existing install
+        - Installing the app / extracting the download
+        - Importing or choosing the game files
+        - The game won't start after that
+        - After updating from an older version
         - Other
-    validations:
-      required: true
-  - type: dropdown
-    id: installtype
-    attributes:
-      label: How did you install?
-      options:
-        - Through WheelWizard
-        - Downloaded the setup exe myself
-        - Not sure
     validations:
       required: true
   - type: textarea
@@ -56,20 +55,20 @@ body:
   - type: textarea
     id: logs
     attributes:
-      label: Setup log
-      description: Drag & drop `%TEMP%\WiiCompiled-setup.log` here, or paste the tail end of it below.
+      label: Logs
+      description: Attach `console.log` from the newest run folder if there is one.
       render: text
+  - type: input
+    id: device
+    attributes:
+      label: Device
+      placeholder: "e.g. Galaxy S23 / Ryzen 5 5600 + RTX 3060"
     validations:
       required: true
   - type: input
     id: os
     attributes:
-      label: Windows version
-      placeholder: "e.g. Windows 11 24H2"
+      label: OS version
+      placeholder: "e.g. Android 14 / Windows 11 24H2 / Fedora 44"
     validations:
       required: true
-  - type: input
-    id: av
-    attributes:
-      label: Antivirus (if any besides Windows Defender)
-      placeholder: "e.g. Avast, none"

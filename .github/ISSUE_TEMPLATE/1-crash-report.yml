@@ -8,9 +8,10 @@ body:
       value: |
         Thanks for the report! Crashes are almost impossible to fix without logs, so please fill this in fully.
 
-        **Where to find your logs** (paste the path into the File Explorer address bar):
-        - Playing through **WheelWizard** (most people): `%APPDATA%\CT-MKWII\Recomp\UserData\Logs`
-        - Installed with the standalone setup exe: `%LOCALAPPDATA%\WiiCompiled\Logs`
+        **Where to find your logs:**
+        - **Windows:** `Documents\MarioWiiSaveData\Logs` (paste `%USERPROFILE%\Documents\MarioWiiSaveData\Logs` into the File Explorer address bar)
+        - **Linux:** `~/.local/share/WiiCompiled/Logs`
+        - **Android:** connect the phone to a computer with a USB cable and open `Android/data/com.wither.nsmbw/files/Logs`
 
         Every run gets its own folder. Open the **newest** one and attach (drag & drop) `console.log` and any `crash_*.txt` file from it.
   - type: checkboxes
@@ -18,18 +19,28 @@ body:
     attributes:
       label: Before you continue
       options:
-        - label: I'm on the latest release of WiiCompiled.
+        - label: I'm on the latest release.
           required: true
         - label: I searched the existing issues and nobody has reported this crash yet.
           required: true
-        - label: This is about the game runtime, not the WheelWizard app itself (WheelWizard problems go to their tracker - see the link on the "New issue" page).
+        - label: My game is New Super Mario Bros. Wii, USA (SMNE01), revision 1.
           required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Android
+        - Windows
+        - Linux
+    validations:
+      required: true
   - type: input
     id: version
     attributes:
-      label: WiiCompiled version
-      description: It's the very first line of `console.log` (the log you're attaching below) - it starts with `[runtime] WiiCompiled v…`.
-      placeholder: "e.g. v0.2.12"
+      label: Version
+      description: The release you downloaded (it's in the file name).
+      placeholder: "e.g. 0.1.2"
     validations:
       required: true
   - type: dropdown
@@ -37,12 +48,12 @@ body:
     attributes:
       label: When does it crash?
       options:
-        - During startup / before the menus
-        - In the menus
-        - When loading a race
-        - During a race (offline)
-        - During a race (online)
-        - After finishing a race / results screen
+        - During startup, before the title screen
+        - On the title screen or the file select
+        - On the world map
+        - While loading a level
+        - During a level
+        - In a LAN game
         - Randomly / no clear pattern
     validations:
       required: true
@@ -61,8 +72,8 @@ body:
     id: doing
     attributes:
       label: What were you doing when it crashed?
-      description: Game mode, track, character/vehicle, how many players, anything you pressed right before. The more specific, the better.
-      placeholder: "e.g. Retro Rewind online room, playing SNES Mario Circuit 3, crashed right as I crossed the finish line…"
+      description: Which world and level, how many players, which power-up, anything you pressed right before. The more specific, the better.
+      placeholder: "e.g. World 3-4 with two players, it froze when Luigi picked up a propeller mushroom…"
     validations:
       required: true
   - type: textarea
@@ -77,21 +88,22 @@ body:
     id: logs
     attributes:
       label: Logs
-      description: Drag & drop `console.log` and any `crash_*.txt` from your newest run folder here, or paste the tail end of them below.
+      description: Drag & drop `console.log` and any `crash_*.txt` from your newest run folder here, or paste the end of them below.
       render: text
     validations:
       required: true
   - type: input
-    id: gpu
+    id: device
     attributes:
-      label: GPU + driver version
-      placeholder: "e.g. RTX 3060, driver 560.94"
+      label: Device
+      description: Phone model, or the PC's CPU and GPU (with the driver version).
+      placeholder: "e.g. Pixel 7 / Ryzen 5 5600 + RTX 3060, driver 560.94"
     validations:
       required: true
   - type: input
     id: os
     attributes:
-      label: Windows version
-      placeholder: "e.g. Windows 11 24H2"
+      label: OS version
+      placeholder: "e.g. Android 14 / Windows 11 24H2 / Fedora 44"
     validations:
       required: true
