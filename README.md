@@ -3,6 +3,7 @@
 <p align="center">
   <a href="https://github.com/WitherBlitz/NSMB-Wii-Multiplayer-Recompilation/releases/latest"><img alt="Android 11+, arm64" src="https://img.shields.io/badge/Android-11%2B%20%C2%B7%20arm64-3DDC84?logo=android&amp;logoColor=white"></a>
   <a href="https://github.com/WitherBlitz/NSMB-Wii-Multiplayer-Recompilation/releases/latest"><img alt="Windows 10 / 11, x64" src="https://img.shields.io/badge/Windows-10%20%2F%2011%20%C2%B7%20x64-0078D4"></a>
+  <a href="https://github.com/WitherBlitz/NSMB-Wii-Multiplayer-Recompilation/releases/latest"><img alt="Linux, x86-64" src="https://img.shields.io/badge/Linux-x86--64-FCC624?logo=linux&amp;logoColor=black"></a>
 </p>
 <p align="center">
   <a href="#building-from-source"><img alt="PowerPC static recompilation" src="https://img.shields.io/badge/PowerPC-static%20recompilation-FF9F0A"></a>
@@ -10,8 +11,8 @@
   <a href="LICENSE"><img alt="License: GPLv3" src="https://img.shields.io/badge/license-GPLv3-2EA44F?logo=gnu&amp;logoColor=white"></a>
 </p>
 
-A native port of New Super Mario Bros. Wii for Android phones and Windows PCs, made with static
-recompilation.
+A native port of New Super Mario Bros. Wii for Android phones and Windows and Linux PCs, made with
+static recompilation.
 
 There's no emulator in the loop, no interpreter, no JIT, no PowerPC anywhere at runtime.
 
@@ -78,15 +79,31 @@ resolution with **Match Screen Resolution**.
 
 **Settings gear.**
 The gear next to the Couch / LAN button on the save file screen opens the game's settings window,
-and so do **Settings** in the world map's **+** menu (under Quick Save) and the gear at the top
-right of a level's pause menu.
+and so do **Settings** in the world map's **+** menu (under Quick Save) and **Settings** in a
+level's pause window (between Continue and Exit Course).
 **Video:** Match Screen Resolution, the resolution multiplier (greyed out while matching the
 screen; on a wide screen each scale comes as "1x (480p)" with black bars or "1x Ultrawide" filling
 the screen), Show FPS Counter (off by default), Frametime Graph (each frame's time, drawn under
 the FPS counter; off by default), Spinning Coins (animated coins and blocks, on by default) and, on
 Windows, V-Sync (no tearing: the game's clock follows the display's refresh, one frame per refresh at
-60 Hz or every third at 180 Hz; off by default). **Keybinds:** every keyboard control, each changed
-by picking it and pressing the new key, with Reset Defaults.
+60 Hz or every third at 180 Hz; off by default). On Windows and Linux, **Fullscreen**: Off, Borderless
+(a window covering the screen, as F11 toggles) or Exclusive (the game takes over the display); each
+press moves to the next. **Audio:** Master, Music and Sound Effects
+sliders, each with its percentage beside it; drag one (finger or mouse) or move it 5% at a time with
+left and right. **Keybinds:** every keyboard control, each changed by picking it and pressing the new
+key, with Reset Defaults, and **Space Smart Spin QoL** (on by default): on the keyboard, Space pressed
+while Mario is in the air spins him, like shaking the remote, instead of pressing 2 (wall jumps,
+swimming and Yoshi's flutter keep 2; within about a small Mario's height of the ground it is the
+next jump instead). **Language:** English, Español or
+Français, the three languages on the USA disc (Nintendo's own translations); a change applies the
+next time the game starts.
+
+**Leaving the app pauses the game (Android).**
+Switch to another app or go to the home screen and the game stops where it is; come back and it
+carries on from the same frame. Before it pauses, it also writes the game's own Quick Save of your
+progress, so if Android closes the app while you're away, the next start puts you back on the world
+map at the level you were in. Coming back normally deletes that backup again. (With the pause
+window or the world map's menu open, it pauses without the backup: that menu has Quick Save itself.)
 
 **Settings.**
 On Android, **Settings** on the start menu holds Display (aspect ratio, render resolution, FPS
@@ -103,7 +120,14 @@ On Android, the app can open straight into the game; Back > **Start Menu** bring
 | --- | --- | --- | --- | --- |
 | Samsung Galaxy S26 Ultra (SM-S948U) | Qualcomm Snapdragon 8 Elite Gen 5 for Galaxy (SM8850) | Adreno 840 | 16 | 60 fps, LAN play |
 | T-Mobile REVVL 7 5G (TMRV075G) | Qualcomm Snapdragon 6 Gen 1 (SM6450) | Adreno 710 | 14 | 60 fps, LAN play |
+| Google Pixel 3 XL | Qualcomm Snapdragon 845 (SDM845) | Adreno 630 | 12 | 60 fps (the world map 45-50 once the phone is hot), LAN play |
+| LG V30+ (LS998) | Qualcomm Snapdragon 835 (MSM8998) | Adreno 540 | 8.0 | Not supported: needs Android 11 and Vulkan 1.1 |
 | Windows 10 PC | AMD Ryzen 5 5600G | NVIDIA GeForce RTX 5070 | - | 60 fps, LAN play with the phones |
+| Windows PC | AMD Ryzen 7 5700X3D | NVIDIA GeForce RTX 5070 Ti | - | 60 fps, LAN play |
+
+Linux has been run on Ubuntu 26.04 and Fedora 44, both under WSL with software rendering so far: it
+boots, plays with sound, and computes the same frames as Windows for LAN play. Reports from real
+Linux PCs and the Steam Deck are welcome.
 
 > [!WARNING]
 > **Untested on Mali GPUs** (most phones with MediaTek, Samsung Exynos or Google Tensor chips).
@@ -114,7 +138,11 @@ On Android, the app can open straight into the game; Back > **Start Menu** bring
 
 - **Android:** an arm64 phone on Android 11 or newer, with Vulkan. About 1 GB free for the app,
   the game files and the import.
-- **Windows:** Windows 10 or 11, 64-bit, with a Direct3D 12 or Vulkan GPU.
+- **Windows:** Windows 10 or 11, 64-bit, with a Direct3D 12 or Vulkan GPU. Processors older than
+  Intel Haswell / AMD Excavator (no AVX2) get the compat build automatically (see Installing).
+- **Linux:** a 64-bit x86 PC with a Vulkan driver and glibc 2.35 or newer: Fedora 36 or newer,
+  Ubuntu 22.04 or newer, Debian 12 or newer, Arch, SteamOS and their relatives. X11 and Wayland both
+  work.
 - Your own **USA `SMNE01` revision 1** copy of New Super Mario Bros. Wii, and Dolphin on a computer
   to extract it.
 
@@ -139,8 +167,9 @@ You do this once, with Dolphin on a computer:
 checks the game, copies it in, and you can delete the copy afterwards. Your saves are kept when you
 import again.
 
-**Windows:** start `NSMBW.exe` and choose that folder when it asks. Or name the folder `game` and put
-it next to `NSMBW.exe`. Keep the folder: the PC version reads it every time.
+**Windows and Linux:** start `NSMBW.exe` (Linux: `./NSMBW`) and choose that folder when it asks. Or
+name the folder `game` and put it next to `NSMBW.exe` (`NSMBW`). Keep the folder: the PC version
+reads it every time.
 
 The app's start screen shows these steps until a game is imported, and **Help** shows them again.
 
@@ -149,13 +178,23 @@ The app's start screen shows these steps until a game is imported, and **Help** 
 Download from the [Releases](https://github.com/WitherBlitz/NSMB-Wii-Multiplayer-Recompilation/releases/latest)
 page:
 
-- **Android:** `NSMBW-0.1.1-android-arm64.apk`. Open it on your phone and allow installing from that
+- **Android:** `NSMBW-0.2.0-android-arm64.apk`. Open it on your phone and allow installing from that
   app when Android asks. Updates install over it and keep your saves and game files.
-- **Windows:** `NSMBW-0.1.1-windows-x64.zip`. Extract it anywhere and run `NSMBW.exe`. Settings
+- **Windows:** `NSMBW-0.2.0-windows-x64.zip`. Extract it anywhere and run `NSMBW.exe`. Settings
   (including where your game files are), saves and caches live in `Documents\MarioWiiSaveData`, so a
   new version, extracted anywhere, carries on where the last one left off. The first start of 0.0.8 or
   later takes over the data of an older version extracted in the same folder (or of the version it
-  replaces).
+  replaces). On a processor without AVX2 (older than Intel Haswell or AMD Excavator), `NSMBW.exe`
+  starts `compat\NSMBW-compat.exe` by itself: the same game, with its math done the long way, so it
+  still plays LAN games with everyone else. Keep the `compat` folder next to `NSMBW.exe`.
+- **Linux:** `NSMBW-0.2.0-linux-x86_64.tar.gz`. Extract it anywhere and run `./NSMBW`. The first start
+  asks for the extracted game folder (with zenity or kdialog; or put the folder next to `NSMBW`,
+  named `game`). Settings, saves and caches live in `~/.local/share/WiiCompiled`
+  (`$XDG_DATA_HOME/WiiCompiled` if set). Older processors get `compat/NSMBW-compat` automatically, as
+  on Windows. Fedora Workstation, KDE and Ubuntu desktops already have everything else it needs; if the
+  game says it found no Vulkan driver, install it with `sudo dnf install mesa-vulkan-drivers
+  vulkan-loader` (Fedora) or `sudo apt install mesa-vulkan-drivers libvulkan1` (Ubuntu, Debian), or
+  your NVIDIA driver.
 - **Another game, such as a mod:** saves are kept per game. Extract a second copy of the release and
   put that game's extracted folder next to its `NSMBW.exe`, named `game`. That copy plays it with
   saves of its own, and the first copy keeps playing the original.
@@ -175,11 +214,11 @@ start menu.
 | Key | Wii Remote |
 | --- | --- |
 | Arrow keys | D-pad |
-| X or Space | 2 (jump) |
+| X or Space | 2 (jump); Space in the air spins (Space Smart Spin QoL) |
 | Z or Left Shift | 1 (run, fireball) |
 | C or Ctrl | Shake (spin, pick up) |
 | Q / E | Tilt left / right |
-| A | A |
+| B | A |
 | Enter or Esc | + (pause, the world map's menu) |
 | Minus or Tab | - |
 | F10 | Settings bar |
@@ -274,11 +313,11 @@ No, behaving like the real game is the goal. Only report things where this port 
 original game on a Wii or in Dolphin.
 
 **The game crashed or shows something wrong.**
-Open an issue with your device, what you did, and (on Windows) the log from
-`Documents\MarioWiiSaveData\Logs`.
+Open an issue with your device, what you did, and the log from `Documents\MarioWiiSaveData\Logs`
+(Windows) or `~/.local/share/WiiCompiled/Logs` (Linux).
 
 **Is it done?**
-No, this is 0.1.1. It boots and plays on the tested devices, but not every level has been checked,
+No, this is 0.2.0. It boots and plays on the tested devices, but not every level has been checked,
 and rendering, performance and LAN play are still being worked on.
 
 ## AI usage
@@ -291,6 +330,7 @@ New Super Mario Bros. Wii, the Android app, and LAN play.
 
 - **[WiiCompiled](https://github.com/patchzyy/Wiicompiled)** by patchzyy and contributors - the
   static recompiler and runtime this port is built on.
+- **[Jude (@YlPorts)](https://github.com/YlPorts)** - the Android draw-count and Mali GPU changes.
 - **[KartPad](https://github.com/chrissotraidis/kartpad)** - WiiCompiled on Android, whose approach
   and game-file import steps this port follows.
 - **[aurora](https://github.com/encounter/aurora)** - the GX rendering/windowing backend. MIT
