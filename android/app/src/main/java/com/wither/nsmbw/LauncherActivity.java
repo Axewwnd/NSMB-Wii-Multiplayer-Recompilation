@@ -10,6 +10,9 @@ import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.RippleDrawable;
+import android.graphics.drawable.GradientDrawable;
+import android.content.res.ColorStateList;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -60,9 +63,10 @@ public final class LauncherActivity extends Activity {
             + "Dolphin shows the revision under Properties > Info.";
 
     private AppSettings settings;
-    private Button skip;
+    /** The On/Off pills of the Skip Start Menu and Auto Update rows. */
+    private TextView skip;
     private Button updateCheck;
-    private Button autoUpdate;
+    private TextView autoUpdate;
     /** Skip Start Menu with Auto Update on: open the game once the update check finds nothing. */
     private boolean skipAfterCheck;
     private boolean updating;
@@ -93,12 +97,13 @@ public final class LauncherActivity extends Activity {
             }
             skipAfterCheck = true;  // Auto Update first; the game opens once there's nothing to install
         }
-        final int pad = dp(24);
-        final LinearLayout column = new LinearLayout(this);
-        column.setOrientation(LinearLayout.VERTICAL);
-        column.setPadding(pad, dp(12), pad, pad);
-        column.setGravity(Gravity.CENTER_HORIZONTAL);
+        final int pad = dp(20);
+        final int screenWidth = getResources().getDisplayMetrics().widthPixels;
+        // Landscape (or a tablet): title, status and Play on the left, the rest beside them.
+        final boolean twoPanes = screenWidth >= dp(720);
 
+        final LinearLayout intro = new LinearLayout(this);
+        intro.setOrientation(LinearLayout.VERTICAL);
         final LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
         header.setGravity(Gravity.CENTER_VERTICAL);
@@ -106,64 +111,59 @@ public final class LauncherActivity extends Activity {
         title.setTypeface(Typeface.DEFAULT_BOLD);
         title.setGravity(Gravity.START);
         header.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        header.addView(link("Help", v -> showHelp()));
-        column.addView(header, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
+        final TextView help = text("Help", 15);
+        help.setTypeface(MEDIUM);
+        help.setPadding(dp(18), dp(8), dp(18), dp(8));
+        help.setBackground(rounded(Color.TRANSPARENT, Color.TRANSPARENT, dp(18), STROKE));
+        help.setOnClickListener(v -> showHelp());
+        header.addView(help);
+        intro.addView(header, matchWidth(0));
         final TextView subtitle = text("New Super Mario Bros. Wii, recompiled to run natively", 15);
         subtitle.setGravity(Gravity.START);
-        column.addView(subtitle, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT));
+        subtitle.setTextColor(MUTED);
+        intro.addView(subtitle, matchWidth(dp(2)));
 
-        status = text("", 16);
-        status.setPadding(0, dp(20), 0, dp(12));
-        column.addView(status);
+        status = text("", 15);
+        status.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        status.setCompoundDrawablePadding(dp(10));
+        status.setPadding(dp(16), dp(12), dp(16), dp(12));
+        status.setBackground(rounded(SURFACE, SURFACE, dp(16), 0));
+        intro.addView(status, matchWidth(dp(20)));
 
-        play = button("Play");
+        play = button("Play", true);
         play.setOnClickListener(v -> startActivity(new Intent(this, GameActivity.class)));
-        column.addView(play);
+        intro.addView(play, matchWidth(dp(14)));
 
-        updateCheck = button("Check for Updates");
+        final LinearLayout updates = card("Updates");
+        updateCheck = button("Check for Updates", false);
         updateCheck.setOnClickListener(v -> checkForUpdates(false));
-        column.addView(updateCheck);
-        autoUpdate = button("");
-        autoUpdate.setOnClickListener(v -> {
-            settings.setAutoUpdate(!settings.autoUpdate());
-            updateAutoUpdateButton();
-        });
-        column.addView(autoUpdate);
-        final TextView autoUpdateHelp = text("On: opening the app installs the latest release from GitHub "
-                + "when there is one. Your saves, settings and game files are kept.", 13);
-        autoUpdateHelp.setTextColor(Color.rgb(170, 178, 186));
-        autoUpdateHelp.setPadding(0, dp(4), 0, 0);
-        column.addView(autoUpdateHelp);
+        updates.addView(updateCheck, matchWidth(dp(10)));
+        autoUpdate = toggle(updates, "Auto Update", "On: opening the app installs the latest release from "
+                + "GitHub when there is one. Your saves, settings and game files are kept.", v -> {
+                    settings.setAutoUpdate(!settings.autoUpdate());
+                    updateAutoUpdateButton();
+                });
         updateAutoUpdateButton();
 
-        skip = button("");
-        skip.setOnClickListener(v -> {
-            settings.setSkipStartMenu(!settings.skipStartMenu());
-            updateSkipButton();
-        });
-        column.addView(skip);
-        final TextView skipHelp = text("On: opening the app goes straight into the game. "
-                + "In the game, the phone's Back gesture and Start Menu bring you back here.", 13);
-        skipHelp.setTextColor(Color.rgb(170, 178, 186));
-        skipHelp.setPadding(0, dp(4), 0, 0);
-        column.addView(skipHelp);
+        final LinearLayout options = card("Options");
+        final Button settingsButton = button("Settings", false);
+        settingsButton.setOnClickListener(v -> SettingsMenu.show(this));
+        options.addView(settingsButton, matchWidth(dp(10)));
+        final Button devices = button("Tailscale & LAN Devices", false);
+        devices.setOnClickListener(v -> DevicesDialog.show(this));
+        options.addView(devices, matchWidth(dp(10)));
+        skip = toggle(options, "Skip Start Menu", "On: opening the app goes straight into the game. "
+                + "In the game, the phone's Back gesture and Start Menu bring you back here.", v -> {
+                    settings.setSkipStartMenu(!settings.skipStartMenu());
+                    updateSkipButton();
+                });
         updateSkipButton();
 
-        final Button settingsButton = button("Settings");
-        settingsButton.setOnClickListener(v -> SettingsMenu.show(this));
-        column.addView(settingsButton);
-
-        final Button devices = button("Tailscale & LAN Devices");
-        devices.setOnClickListener(v -> DevicesDialog.show(this));
-        column.addView(devices);
-
+        final LinearLayout gameData = card("Game Data");
         // How to get the game files, the same steps KartPad gives, until a game is imported.
         final LinearLayout stepsBox = new LinearLayout(this);
         stepsBox.setOrientation(LinearLayout.VERTICAL);
-        stepsBox.setPadding(0, dp(24), 0, 0);
-        final TextView stepsTitle = text("Get the game files (once)", 20);
+        final TextView stepsTitle = text("Get the game files (once)", 18);
         stepsTitle.setTypeface(Typeface.DEFAULT_BOLD);
         stepsTitle.setGravity(Gravity.START);
         stepsBox.addView(stepsTitle);
@@ -171,38 +171,67 @@ public final class LauncherActivity extends Activity {
                 "1. In Dolphin on a computer, right-click New Super Mario Bros. Wii and choose Properties.\n"
                 + "2. Open Filesystem, right-click the disc at the top and choose Extract Entire Disc.\n"
                 + "3. Copy that folder (or a zip of it) to this phone.\n"
-                + "4. Tap Import from Extracted Game Data Folder… or Import Game Data Zip… below and choose it.\n\n"
+                + "4. Tap Import from Extracted Game Data Folder\u2026 or Import Game Data Zip\u2026 below and choose it.\n\n"
                 + "Use the USA disc, revision 1 (SMNE01): Dolphin shows the revision under Properties > Info.", 15);
         stepsText.setGravity(Gravity.START);
-        stepsText.setPadding(0, dp(6), 0, 0);
+        stepsText.setPadding(0, dp(6), 0, dp(14));
         stepsText.setLineSpacing(dp(3), 1f);
         stepsBox.addView(stepsText);
         steps = stepsBox;
-        column.addView(stepsBox, new LinearLayout.LayoutParams(Math.min(dp(560),
-                getResources().getDisplayMetrics().widthPixels - 2 * pad), LinearLayout.LayoutParams.WRAP_CONTENT));
-
+        gameData.addView(stepsBox, matchWidth(dp(10)));
         final TextView importHelp = text("Import your own New Super Mario Bros. Wii (USA, SMNE01) once. "
                 + "Easiest: the folder Dolphin's Extract Entire Disc makes (DATA, or the folder that holds it), "
                 + "or a zip of that folder. Your saves are kept.", 13);
-        importHelp.setTextColor(Color.rgb(170, 178, 186));
-        importHelp.setPadding(0, dp(24), 0, 0);
-        column.addView(importHelp);
-
-        final Button importFolder = button("Import from Extracted Game Data Folder…");
+        importHelp.setGravity(Gravity.START);
+        importHelp.setTextColor(MUTED);
+        gameData.addView(importHelp, matchWidth(dp(8)));
+        final Button importFolder = button("Import from Extracted Game Data Folder\u2026", false);
         importFolder.setOnClickListener(v -> startActivityForResult(
                 new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), REQUEST_IMPORT));
-        column.addView(importFolder);
-        final Button importZip = button("Import Game Data Zip…");
+        gameData.addView(importFolder, matchWidth(dp(12)));
+        final Button importZip = button("Import Game Data Zip\u2026", false);
         importZip.setOnClickListener(v -> pickZip());
-        column.addView(importZip);
+        gameData.addView(importZip, matchWidth(dp(10)));
 
         final TextView version = text("NSMBW " + versionText(), 13);
-        version.setTextColor(Color.rgb(120, 128, 136));
-        version.setPadding(0, dp(24), 0, 0);
-        column.addView(version);
+        version.setTextColor(FAINT);
+
+        final LinearLayout page = new LinearLayout(this);
+        page.setPadding(pad, dp(16), pad, pad);
+        if (twoPanes) {
+            page.setOrientation(LinearLayout.HORIZONTAL);
+            page.setGravity(Gravity.CENTER_HORIZONTAL);
+            final int left = dp(340);
+            final int right = Math.min(dp(500), screenWidth - 2 * pad - left - dp(24));
+            version.setGravity(Gravity.START);
+            intro.addView(version, matchWidth(dp(16)));
+            page.addView(intro, new LinearLayout.LayoutParams(left, LinearLayout.LayoutParams.WRAP_CONTENT));
+            final LinearLayout cards = new LinearLayout(this);
+            cards.setOrientation(LinearLayout.VERTICAL);
+            cards.addView(updates, matchWidth(0));
+            cards.addView(options, matchWidth(dp(14)));
+            cards.addView(gameData, matchWidth(dp(14)));
+            final LinearLayout.LayoutParams cardsParams =
+                    new LinearLayout.LayoutParams(right, LinearLayout.LayoutParams.WRAP_CONTENT);
+            cardsParams.leftMargin = dp(24);
+            page.addView(cards, cardsParams);
+        } else {
+            page.setOrientation(LinearLayout.VERTICAL);
+            page.setGravity(Gravity.CENTER_HORIZONTAL);
+            final int width = Math.min(dp(520), screenWidth - 2 * pad);
+            final LinearLayout column = new LinearLayout(this);
+            column.setOrientation(LinearLayout.VERTICAL);
+            column.addView(intro, matchWidth(0));
+            column.addView(updates, matchWidth(dp(20)));
+            column.addView(options, matchWidth(dp(14)));
+            column.addView(gameData, matchWidth(dp(14)));
+            column.addView(version, matchWidth(dp(18)));
+            page.addView(column, new LinearLayout.LayoutParams(width, LinearLayout.LayoutParams.WRAP_CONTENT));
+        }
 
         final ScrollView scroll = new ScrollView(this);
-        scroll.addView(column);
+        scroll.setFillViewport(true);
+        scroll.addView(page);
         setContentView(scroll);
         restartGameIfAsked(getIntent());
         if (opened && settings.autoUpdate()) {
@@ -241,7 +270,7 @@ public final class LauncherActivity extends Activity {
     // --- updates -------------------------------------------------------------------------------
 
     private void updateAutoUpdateButton() {
-        autoUpdate.setText("Auto Update: " + (settings.autoUpdate() ? "On" : "Off"));
+        showToggle(autoUpdate, settings.autoUpdate());
     }
 
     /** The latest GitHub release: installs it when newer. `automatic`: Auto Update, at app start. */
@@ -352,18 +381,18 @@ public final class LauncherActivity extends Activity {
     }
 
     private void updateSkipButton() {
-        skip.setText("Skip Start Menu: " + (settings.skipStartMenu() ? "On" : "Off"));
+        showToggle(skip, settings.skipStartMenu());
     }
 
     private void refresh() {
         final boolean present = AppFiles.hasGameData(this);
         final String problem = present ? AppFiles.gameProblem(AppFiles.gameDir(this)) : null;
         if (!present) {
-            status.setText("No game data yet. Import the folder Dolphin made, or a zip of it.");
+            showStatus("No game data yet. Import the folder Dolphin made, or a zip of it.", AMBER);
         } else if (problem != null) {
-            status.setText("The imported game can't be played. " + problem);
+            showStatus("The imported game can't be played. " + problem, ACCENT);
         } else {
-            status.setText("Game data is installed and checked.");
+            showStatus("Game data is installed and checked.", GREEN);
         }
         play.setEnabled(present && problem == null);
         steps.setVisibility(present && problem == null ? View.GONE : View.VISIBLE);
@@ -717,14 +746,122 @@ public final class LauncherActivity extends Activity {
         return view;
     }
 
-    private Button button(String label) {
+    // The start menu's colors, on the theme's #101418 background.
+    private static final int ACCENT = Color.rgb(229, 57, 53);
+    private static final int SURFACE = Color.rgb(24, 31, 38);
+    private static final int RAISED = Color.rgb(38, 48, 58);
+    private static final int STROKE = Color.rgb(48, 60, 72);
+    private static final int MUTED = Color.rgb(170, 178, 186);
+    private static final int FAINT = Color.rgb(120, 128, 136);
+    private static final int GREEN = Color.rgb(102, 187, 106);
+    private static final int AMBER = Color.rgb(255, 183, 77);
+    private static final Typeface MEDIUM = Typeface.create("sans-serif-medium", Typeface.NORMAL);
+
+    /** A rounded shape that ripples when touched; `disabled` is its color while disabled. */
+    private RippleDrawable rounded(int color, int disabled, int radius, int stroke) {
+        final GradientDrawable shape = new GradientDrawable();
+        shape.setCornerRadius(radius);
+        shape.setColor(new ColorStateList(new int[][] {{-android.R.attr.state_enabled}, {}},
+                new int[] {disabled, color}));
+        if (stroke != 0) {
+            shape.setStroke(dp(1), stroke);
+        }
+        final GradientDrawable mask = new GradientDrawable();
+        mask.setCornerRadius(radius);
+        mask.setColor(Color.WHITE);
+        return new RippleDrawable(ColorStateList.valueOf(Color.argb(56, 255, 255, 255)), shape, mask);
+    }
+
+    /** A pill button: `primary` is the big red Play. */
+    private Button button(String label, boolean primary) {
         final Button view = new Button(this);
         view.setText(label);
         view.setAllCaps(false);
-        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(dp(320), LinearLayout.LayoutParams.WRAP_CONTENT);
-        params.topMargin = dp(8);
-        view.setLayoutParams(params);
+        view.setStateListAnimator(null);
+        view.setTextSize(TypedValue.COMPLEX_UNIT_SP, primary ? 20 : 16);
+        view.setTypeface(primary ? Typeface.DEFAULT_BOLD : MEDIUM);
+        view.setTextColor(new ColorStateList(new int[][] {{-android.R.attr.state_enabled}, {}},
+                new int[] {FAINT, Color.WHITE}));
+        final int height = dp(primary ? 60 : 50);
+        view.setMinHeight(height);
+        view.setMinimumHeight(height);
+        view.setPadding(dp(20), 0, dp(20), 0);
+        view.setBackground(primary ? rounded(ACCENT, RAISED, height / 2, 0)
+                : rounded(RAISED, SURFACE, height / 2, 0));
         return view;
+    }
+
+    /** A rounded section of the start menu, with a small heading. */
+    private LinearLayout card(String heading) {
+        final LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(16), dp(14), dp(16), dp(16));
+        final GradientDrawable shape = new GradientDrawable();
+        shape.setCornerRadius(dp(22));
+        shape.setColor(SURFACE);
+        shape.setStroke(dp(1), Color.rgb(34, 44, 53));
+        card.setBackground(shape);
+        final TextView title = text(heading.toUpperCase(Locale.ROOT), 12);
+        title.setGravity(Gravity.START);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setLetterSpacing(0.12f);
+        title.setTextColor(MUTED);
+        card.addView(title, matchWidth(0));
+        return card;
+    }
+
+    /** A setting row in `card`: its label, an On/Off pill (returned) and what On does underneath. */
+    private TextView toggle(LinearLayout card, String label, String help, View.OnClickListener onClick) {
+        final LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setMinimumHeight(dp(50));
+        row.setPadding(dp(20), dp(6), dp(8), dp(6));
+        row.setBackground(rounded(RAISED, RAISED, dp(25), 0));
+        row.setClickable(true);
+        row.setOnClickListener(onClick);
+        final TextView name = text(label, 16);
+        name.setTypeface(MEDIUM);
+        name.setGravity(Gravity.START);
+        row.addView(name, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        final TextView pill = text("", 14);
+        pill.setTypeface(Typeface.DEFAULT_BOLD);
+        pill.setGravity(Gravity.CENTER);
+        pill.setMinWidth(dp(64));
+        pill.setPadding(dp(14), dp(7), dp(14), dp(7));
+        row.addView(pill);
+        card.addView(row, matchWidth(dp(10)));
+        final TextView about = text(help, 13);
+        about.setGravity(Gravity.START);
+        about.setTextColor(MUTED);
+        about.setPadding(dp(4), dp(6), dp(4), 0);
+        card.addView(about, matchWidth(0));
+        return pill;
+    }
+
+    private void showToggle(TextView pill, boolean on) {
+        pill.setText(on ? "On" : "Off");
+        pill.setTextColor(on ? Color.WHITE : MUTED);
+        final GradientDrawable shape = new GradientDrawable();
+        shape.setCornerRadius(dp(17));
+        shape.setColor(on ? ACCENT : SURFACE);
+        pill.setBackground(shape);
+    }
+
+    private void showStatus(String text, int color) {
+        status.setText(text);
+        final GradientDrawable dot = new GradientDrawable();
+        dot.setShape(GradientDrawable.OVAL);
+        dot.setColor(color);
+        dot.setSize(dp(10), dp(10));
+        status.setCompoundDrawablesRelativeWithIntrinsicBounds(dot, null, null, null);
+    }
+
+    private LinearLayout.LayoutParams matchWidth(int topMargin) {
+        final LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        params.topMargin = topMargin;
+        return params;
     }
 
     private int dp(int value) {
