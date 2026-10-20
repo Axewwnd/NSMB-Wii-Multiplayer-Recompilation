@@ -39,18 +39,15 @@ inline uint32_t CanonicalizeGxMainRamAddress(uint32_t addr) noexcept {
 
 namespace GxGuestWrite {
 
-// Granularity. 64 KiB matches the GX resource caches' occupancy maps, so a cacheable display list
-// or texture spans only a handful of counters; a false bump costs one re-digest. NSMBW flushes small
-// objects every frame beside its textures, though (a 2 MiB world-map texture shares its last 64 KiB
-// with 64-byte buffers flushed twice a frame), so at 64 KiB six textures and their mips were
-// re-hashed every frame: 130 MB a second. Outside lockstep (LAN) play the counters cover 4 KiB
-// instead; lockstep play keeps the 64 KiB granules (UseCoarseGranules, at startup).
-inline constexpr uint32_t kGranuleShift = 16;     // 64 KiB per granule (lockstep play)
-inline constexpr uint32_t kFineGranuleShift = 12; // 4 KiB per granule (couch play)
+// Granularity matches the GX resource caches' occupancy maps: 64 KiB, so a
+// cacheable display list or texture spans only a handful of counters. A false
+// bump only costs one re-digest, which is exactly the untracked behaviour.
+// Do not shrink without finding the unreported write first: at 4 KiB (0.2.0, couch play) Toad
+// Houses and courses such as 5-1 drew the previous course's tiles. Some write of a course's tile
+// textures is never notified, and at 64 KiB other writes in the same granule cover for it.
+inline constexpr uint32_t kGranuleShift = 16; // 64 KiB per granule
 inline constexpr uint64_t kTrackedSpan = static_cast<uint64_t>(Memory::kMem2PhysicalEnd);
-inline constexpr size_t kGranuleCount = static_cast<size_t>(kTrackedSpan >> kFineGranuleShift);
-inline uint32_t g_granuleShift = kFineGranuleShift;
-inline void UseCoarseGranules() noexcept { g_granuleShift = kGranuleShift; }
+inline constexpr size_t kGranuleCount = static_cast<size_t>(kTrackedSpan >> kGranuleShift);
 
 // Folded value used for "this range is not covered by the granule map", which
 // forces the consumer to recompute its digest on every call.
@@ -74,9 +71,8 @@ inline uint64_t GenerationForRange(uint32_t addr, uint32_t nbytes) noexcept {
     if (end <= start || end > kTrackedSpan) {
         return kUntracked;
     }
-    const uint32_t shift = g_granuleShift;
-    const size_t firstGranule = static_cast<size_t>(start >> shift);
-    const size_t lastGranule = static_cast<size_t>((end - 1) >> shift);
+    const size_t firstGranule = static_cast<size_t>(start >> kGranuleShift);
+    const size_t lastGranule = static_cast<size_t>((end - 1) >> kGranuleShift);
     uint64_t folded = 0;
     for (size_t granule = firstGranule; granule <= lastGranule; ++granule) {
         folded += g_generations[granule].load(std::memory_order_relaxed);
@@ -98,9 +94,8 @@ inline void NotifyWrite(uint32_t addr, uint32_t size) noexcept {
         return;
     }
     const uint64_t clampedEnd = end < kTrackedSpan ? end : kTrackedSpan;
-    const uint32_t shift = g_granuleShift;
-    const size_t firstGranule = static_cast<size_t>(start >> shift);
-    const size_t lastGranule = static_cast<size_t>((clampedEnd - 1) >> shift);
+    const size_t firstGranule = static_cast<size_t>(start >> kGranuleShift);
+    const size_t lastGranule = static_cast<size_t>((clampedEnd - 1) >> kGranuleShift);
     for (size_t granule = firstGranule; granule <= lastGranule; ++granule) {
         g_generations[granule].fetch_add(1u, std::memory_order_relaxed);
     }
