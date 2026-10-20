@@ -1,5 +1,7 @@
 #include "det_hash.h"
 
+#include "hle/audio/ax_dsp.h"
+
 #include "det_clock.h"
 #include "memory.h"
 #include "runtime_config.h"
@@ -95,7 +97,15 @@ Digest HashGuestMemory() {
 
 void OnRetrace(uint32_t retraceCount) {
     const Settings& settings = GetSettings();
-    if (!settings.hashFile.empty() && retraceCount % settings.every == 0) {
+    const bool hashing = !settings.hashFile.empty() && retraceCount % settings.every == 0;
+    if (hashing || settings.dumps.count(retraceCount) != 0) {
+        // The AX mix worker writes its output into guest memory on its own thread; the guest only
+        // reads it after joining. Hashing mid-mix caught half-written bytes on slow hosts (WSL's
+        // software renderer), so the same game state hashed differently. Join first: the guest
+        // cannot tell, it would wait for the same mix at its next audio block anyway.
+        AxDspHle::JoinMixWorker();
+    }
+    if (hashing) {
         static std::ofstream file = [&] {
             std::error_code ec;
             std::filesystem::create_directories(settings.hashFile.parent_path(), ec);
