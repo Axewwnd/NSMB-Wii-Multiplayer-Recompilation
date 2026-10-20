@@ -35,6 +35,10 @@ final class AppSettings {
     int gpuCompat() { return prefs.getInt("gpu_compat", GPU_COMPAT_AUTO); }
     void setGpuCompat(int mode) { prefs.edit().putInt("gpu_compat", mode).commit(); }
 
+    /** Auto Update: opening the app installs the latest GitHub release (off by default). */
+    boolean autoUpdate() { return prefs.getBoolean("auto_update", false); }
+    void setAutoUpdate(boolean on) { prefs.edit().putBoolean("auto_update", on).commit(); }
+
     boolean showFps() { return prefs.getBoolean("show_fps", false); }
     void setShowFps(boolean show) { prefs.edit().putBoolean("show_fps", show).commit(); }
     boolean spinningCoins() { return prefs.getBoolean("spinning_coins", true); }

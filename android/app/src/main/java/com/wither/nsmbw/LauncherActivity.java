@@ -16,6 +16,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.provider.DocumentsContract;
 import android.provider.OpenableColumns;
+import android.provider.Settings;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
@@ -60,6 +61,13 @@ public final class LauncherActivity extends Activity {
 
     private AppSettings settings;
     private Button skip;
+    private Button updateCheck;
+    private Button autoUpdate;
+    /** Skip Start Menu with Auto Update on: open the game once the update check finds nothing. */
+    private boolean skipAfterCheck;
+    private boolean updating;
+    /** An update waiting for the player to allow installs from this app. */
+    private Updater.Release waitingUpdate;
 
     private TextView status;
     private Button play;
@@ -75,11 +83,15 @@ public final class LauncherActivity extends Activity {
         final Intent launch = getIntent();
         final boolean asked = launch != null && (launch.getBooleanExtra(EXTRA_SHOW_START_MENU, false)
                 || launch.getBooleanExtra(EXTRA_RESTART_GAME, false));
-        if (savedInstanceState == null && !asked && settings.skipStartMenu() && AppFiles.gameReady(this)) {
-            startActivity(new Intent(this, GameActivity.class));
-            overridePendingTransition(0, 0);
-            finish();
-            return;
+        final boolean opened = savedInstanceState == null && !asked;
+        if (opened && settings.skipStartMenu() && AppFiles.gameReady(this)) {
+            if (!settings.autoUpdate()) {
+                startActivity(new Intent(this, GameActivity.class));
+                overridePendingTransition(0, 0);
+                finish();
+                return;
+            }
+            skipAfterCheck = true;  // Auto Update first; the game opens once there's nothing to install
         }
         final int pad = dp(24);
         final LinearLayout column = new LinearLayout(this);
@@ -109,6 +121,22 @@ public final class LauncherActivity extends Activity {
         play = button("Play");
         play.setOnClickListener(v -> startActivity(new Intent(this, GameActivity.class)));
         column.addView(play);
+
+        updateCheck = button("Check for Updates");
+        updateCheck.setOnClickListener(v -> checkForUpdates(false));
+        column.addView(updateCheck);
+        autoUpdate = button("");
+        autoUpdate.setOnClickListener(v -> {
+            settings.setAutoUpdate(!settings.autoUpdate());
+            updateAutoUpdateButton();
+        });
+        column.addView(autoUpdate);
+        final TextView autoUpdateHelp = text("On: opening the app installs the latest release from GitHub "
+                + "when there is one. Your saves, settings and game files are kept.", 13);
+        autoUpdateHelp.setTextColor(Color.rgb(170, 178, 186));
+        autoUpdateHelp.setPadding(0, dp(4), 0, 0);
+        column.addView(autoUpdateHelp);
+        updateAutoUpdateButton();
 
         skip = button("");
         skip.setOnClickListener(v -> {
@@ -177,6 +205,9 @@ public final class LauncherActivity extends Activity {
         scroll.addView(column);
         setContentView(scroll);
         restartGameIfAsked(getIntent());
+        if (opened && settings.autoUpdate()) {
+            checkForUpdates(true);
+        }
     }
 
     @Override
@@ -199,6 +230,125 @@ public final class LauncherActivity extends Activity {
     protected void onResume() {
         super.onResume();
         refresh();
+        // Back from "Allow from this source": carry on with the update that was waiting for it.
+        if (waitingUpdate != null && Updater.canInstall(this)) {
+            final Updater.Release release = waitingUpdate;
+            waitingUpdate = null;
+            startUpdate(release);
+        }
+    }
+
+    // --- updates -------------------------------------------------------------------------------
+
+    private void updateAutoUpdateButton() {
+        autoUpdate.setText("Auto Update: " + (settings.autoUpdate() ? "On" : "Off"));
+    }
+
+    /** The latest GitHub release: installs it when newer. `automatic`: Auto Update, at app start. */
+    private void checkForUpdates(boolean automatic) {
+        if (updating) {
+            return;
+        }
+        updating = true;
+        updateCheck.setEnabled(false);
+        updateCheck.setText("Checking for updates\u2026");
+        new Thread(() -> {
+            Updater.Release found = null;
+            String failure = null;
+            try {
+                found = Updater.latest();
+            } catch (Exception e) {
+                failure = e.getMessage();
+            }
+            final Updater.Release release = found;
+            final String error = failure;
+            main.post(() -> {
+                updating = false;
+                updateCheck.setEnabled(true);
+                updateCheck.setText("Check for Updates");
+                final String installed = Updater.installedVersion(this);
+                if (release != null && Updater.isNewer(release.version, installed)) {
+                    startUpdate(release);
+                } else if (!automatic) {
+                    final String message = error != null ? "Couldn't check for updates: " + error
+                            : release == null ? "The latest release has no Android download."
+                            : "You have the latest version (" + installed + ").";
+                    new AlertDialog.Builder(this).setMessage(message).setPositiveButton("OK", null).show();
+                } else if (skipAfterCheck) {
+                    openGame();
+                }
+            });
+        }, "update-check").start();
+    }
+
+    private void startUpdate(Updater.Release release) {
+        if (!Updater.canInstall(this)) {
+            new AlertDialog.Builder(this)
+                    .setTitle("NSMBW " + release.version + " is available")
+                    .setMessage("To install updates, let NSMBW install apps: turn on Allow from this source "
+                            + "on the next screen, then come back here.")
+                    .setPositiveButton("Open Settings", (d, w) -> {
+                        waitingUpdate = release;
+                        startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                Uri.parse("package:" + getPackageName())));
+                    })
+                    .setNegativeButton("Not Now", (d, w) -> {
+                        if (skipAfterCheck) {
+                            openGame();
+                        }
+                    })
+                    .show();
+            return;
+        }
+        final ProgressBar bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        final TextView label = text("Downloading\u2026", 14);
+        final LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(24), dp(16), dp(24), dp(8));
+        box.addView(bar);
+        box.addView(label);
+        final AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Updating to NSMBW " + release.version).setView(box).setCancelable(false).show();
+        new Thread(() -> {
+            String failure = null;
+            try {
+                Updater.downloadAndInstall(getApplicationContext(), release, (done, total) -> main.post(() -> {
+                    bar.setIndeterminate(total <= 0);
+                    if (total > 0) {
+                        bar.setMax(1000);
+                        bar.setProgress((int) (done * 1000 / total));
+                        label.setText(String.format(Locale.US, "Downloading\u2026 %d of %d MB",
+                                done >> 20, total >> 20));
+                    }
+                }));
+            } catch (Exception e) {
+                failure = e.getMessage();
+            }
+            final String error = failure;
+            main.post(() -> {
+                dialog.dismiss();
+                if (error != null) {
+                    new AlertDialog.Builder(this).setMessage("The update failed: " + error)
+                            .setPositiveButton("OK", (d, w) -> {
+                                if (skipAfterCheck) {
+                                    openGame();
+                                }
+                            }).show();
+                } else {
+                    status.setText("Installing NSMBW " + release.version + "\u2026");
+                }
+            });
+        }, "update-download").start();
+    }
+
+    private void openGame() {
+        skipAfterCheck = false;
+        if (!AppFiles.gameReady(this)) {
+            return;
+        }
+        startActivity(new Intent(this, GameActivity.class));
+        overridePendingTransition(0, 0);
+        finish();
     }
 
     private void updateSkipButton() {

@@ -13,6 +13,8 @@
     <!-- LAN play: UDP between devices, and a multicast lock so the Wi-Fi driver hands the app the
          broadcast packets rooms are discovered with. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Check for Updates / Auto Update: hands the release's APK to the system installer. -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
@@ -45,5 +47,9 @@
             android:preferMinimalPostProcessing="true"
             android:theme="@style/GameTheme"
             android:configChanges="layoutDirection|locale|grammaticalGender|fontScale|fontWeightAdjustment|orientation|uiMode|screenLayout|screenSize|smallestScreenSize|keyboard|keyboardHidden|navigation" />
+
+        <receiver
+            android:name=".UpdateReceiver"
+            android:exported="false" />
     </application>
 </manifest>
