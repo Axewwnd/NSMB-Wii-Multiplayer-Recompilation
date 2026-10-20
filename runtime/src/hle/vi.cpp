@@ -1009,6 +1009,18 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
         const uint32_t frameReads = dvdReads - s_lastDvdReads;
         s_lastDvd = dvdTotal;
         s_lastDvdReads = dvdReads;
+        // Page faults and this thread's own CPU time over the frame: a slow frame with the thread
+        // mostly off the CPU and no faults was taken away by the system, not spent in the game.
+        static unsigned s_lastFaults = 0;
+        static double s_lastUser = 0, s_lastKernel = 0;
+        const unsigned faults = GuestProfiler::ProcessPageFaults();
+        double user = 0, kernel = 0;
+        GuestProfiler::ThreadCpuMs(&user, &kernel);
+        const unsigned frameFaults = faults - s_lastFaults;
+        const double frameUser = user - s_lastUser, frameKernel = kernel - s_lastKernel;
+        s_lastFaults = faults;
+        s_lastUser = user;
+        s_lastKernel = kernel;
         const Clock::time_point now = Clock::now();
         if (s_lastEnd != Clock::time_point{}) {
             const double frame = ms(now - s_lastEnd);
@@ -1021,10 +1033,10 @@ void VI_HLE_PresentFrame(bool presentedXfb, bool paceToRetrace) {
                 Memory::TryRead32(0x80428730u, sceneWord);
                 RT_LOGF(RT_TAG_VI,
                         "slow frame %.1f ms (scene 0x%03X): game %.2f (gx %.2f, disc %.2f in %u reads), present %.2f, "
-                        "end_frame %.2f, pace %.2f\n",
+                        "end_frame %.2f, pace %.2f; thread cpu %.1f user + %.1f kernel, %u page faults\n",
                         frame, sceneWord & 0xFFFFu, ms(presentStart - s_lastEnd), gxMs, dvdMs, frameReads,
                         ms(endFrameStart - presentStart),
-                        ms(paceStart - endFrameStart), ms(now - paceStart));
+                        ms(paceStart - endFrameStart), ms(now - paceStart), frameUser, frameKernel, frameFaults);
             }
         }
         s_lastEnd = now;

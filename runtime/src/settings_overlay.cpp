@@ -1275,6 +1275,29 @@ void DrawFpsOverlay() {
         const float dt = ImGui::GetIO().DeltaTime;
         g_frameTimes[g_frameTimeNext] = dt > 0.0f && dt < 1.0f ? dt * 1000.0f : 0.0f;
         g_frameTimeNext = (g_frameTimeNext + 1) % kFrameTimeCount;
+        // NSMBW_LOG_FPS: what the graph shows, every 2 s: the presented frames' times, which can be
+        // uneven while the game's own frames (vi's fps line) are not.
+        static const bool s_log = std::getenv("NSMBW_LOG_FPS") != nullptr;
+        if (s_log && dt > 0.0f && dt < 1.0f) {
+            static float s_window = 0, s_worst = 0, s_sumSq = 0;
+            static int s_frames = 0, s_long = 0, s_short = 0;
+            const float frameMs = dt * 1000.0f;
+            s_window += dt;
+            s_worst = std::max(s_worst, frameMs);
+            s_sumSq += frameMs * frameMs;
+            ++s_frames;
+            s_long += frameMs > 20.0f ? 1 : 0;
+            s_short += frameMs < 12.0f ? 1 : 0;
+            if (s_window >= 2.0f) {
+                const float mean = s_window * 1000.0f / s_frames;
+                RT_LOGF(RT_TAG_RUNTIME,
+                        "graph: %d frames, mean %.2f ms, jitter %.2f ms, worst %.1f ms, %d over 20 ms, %d under 12 ms\n",
+                        s_frames, mean, std::sqrt(std::max(0.0f, s_sumSq / s_frames - mean * mean)), s_worst, s_long,
+                        s_short);
+                s_window = s_worst = s_sumSq = 0;
+                s_frames = s_long = s_short = 0;
+            }
+        }
     }
     if (!g_showFps && !g_frameGraph) {
         return;

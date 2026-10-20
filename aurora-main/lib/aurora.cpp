@@ -1824,8 +1824,14 @@ bool run_frame_worker_cycle(gfx::SealedFrame& sealedFrame) noexcept {
     // NSMBW: overlap the encode with the producer's next frame without interpolation too. Encoding
     // and submitting in the SEALED phase made the producer's first drain of every frame (EGG's
     // GXDrawDone) wait out the whole encode: a quarter of the game thread's time on a Pixel 3 XL.
-    // NSMBW_SERIAL_ENCODE=1 restores the serial order.
+    // Android only: desktop GPUs encode well inside a frame, and there the serial order (0.1.1's)
+    // stays, since players felt 0.2.x's presentation as stutterier. NSMBW_SERIAL_ENCODE=1 or
+    // NSMBW_OVERLAP_ENCODE=1 picks one either way.
+#ifdef __ANDROID__
     static const bool serialEncode = std::getenv("NSMBW_SERIAL_ENCODE") != nullptr;
+#else
+    static const bool serialEncode = std::getenv("NSMBW_OVERLAP_ENCODE") == nullptr;
+#endif
     overlapEncode = ctx.interpolationActive || !serialEncode;
     if (!overlapEncode) {
       presentationJobs = encode_sealed_frame(sealedFrame, ctx);
