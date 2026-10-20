@@ -64,6 +64,28 @@ const char* GuestName(uint32_t address) {
 }
 #endif
 
+// The last present, for NSMBW_PROFILE_HITCH.
+std::atomic<int64_t> g_lastPresentNanos{0};
+
+int64_t NowNanos() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+// NSMBW_PROFILE_HITCH=<ms>: the threshold (in ns) past which no present means a hitch, else 0.
+int64_t HitchNanos() {
+    static const int64_t nanos = [] {
+        const char* value = std::getenv("NSMBW_PROFILE_HITCH");
+        return value != nullptr ? static_cast<int64_t>(std::atof(value) * 1e6) : int64_t{0};
+    }();
+    return nanos;
+}
+
+bool InHitch() {
+    const int64_t last = g_lastPresentNanos.load(std::memory_order_relaxed);
+    return last != 0 && NowNanos() - last >= HitchNanos();
+}
+
 #ifdef _WIN32
 void Report(const std::unordered_map<uintptr_t, uint32_t>& samples, const std::vector<std::vector<uintptr_t>>& stacks,
             uint32_t total) {
@@ -180,20 +202,11 @@ void Report(const std::unordered_map<uintptr_t, uint32_t>& samples, const std::v
     }
 }
 
-// The last present, for NSMBW_PROFILE_HITCH.
-std::atomic<int64_t> g_lastPresentNanos{0};
-
-int64_t NowNanos() {
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
-        .count();
-}
-
 void Run(HANDLE thread, double startSeconds, double lengthSeconds) {
     std::this_thread::sleep_for(std::chrono::duration<double>(startSeconds));
     // NSMBW_PROFILE_HITCH=<ms>: keep only the samples taken while no frame has been presented for that
     // long, so the report shows what the game thread does during a hitch rather than on average.
-    const char* hitchValue = std::getenv("NSMBW_PROFILE_HITCH");
-    const int64_t hitchNanos = hitchValue != nullptr ? static_cast<int64_t>(std::atof(hitchValue) * 1e6) : 0;
+    const int64_t hitchNanos = HitchNanos();
     std::unordered_map<uintptr_t, uint32_t> samples;
     std::vector<std::vector<uintptr_t>> stacks;
     uint32_t total = 0;
@@ -217,11 +230,8 @@ void Run(HANDLE thread, double startSeconds, double lengthSeconds) {
             worstLateMs = std::max(worstLateMs, late);
             next = woke;
         }
-        if (hitchNanos > 0) {
-            const int64_t last = g_lastPresentNanos.load(std::memory_order_relaxed);
-            if (last == 0 || NowNanos() - last < hitchNanos) {
-                continue;
-            }
+        if (hitchNanos > 0 && !InHitch()) {
+            continue;
         }
         if (SuspendThread(thread) != static_cast<DWORD>(-1)) {
             CONTEXT context{};
@@ -480,6 +490,9 @@ void RunLinux(pid_t thread, double startSeconds, double lengthSeconds) {
     while (next < end) {
         next += std::chrono::microseconds(1000);
         std::this_thread::sleep_until(next);
+        if (HitchNanos() > 0 && !InHitch()) {
+            continue;  // NSMBW_PROFILE_HITCH: only while no frame has been presented for that long
+        }
         syscall(SYS_tgkill, getpid(), thread, SIGPROF);
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -524,10 +537,8 @@ void ThreadCpuMs(double* user, double* kernel) {
 }
 
 void OnFramePresented() {
-#ifdef _WIN32
-    g_lastPresentNanos.store(NowNanos(), std::memory_order_relaxed);
-#endif
 #if defined(_WIN32) || defined(__linux__)
+    g_lastPresentNanos.store(NowNanos(), std::memory_order_relaxed);
     static bool started = false;
     if (started) {
         return;
