@@ -24,6 +24,17 @@ bool FrameGraph() noexcept;
 // Off by default. Saved to Config.toml.
 void SetVSync(bool enabled) noexcept;
 bool VSync() noexcept;
+// Fullscreen: 0 off (a window), 1 borderless, 2 exclusive (the display's own mode). Applied at once;
+// saved to Config.toml. Desktop only: Android is always fullscreen.
+void SetFullscreen(int mode) noexcept;
+int Fullscreen() noexcept;
+// One of the game's own system sounds (SndAudioMgr::startSystemSe; 121 is the "decide" the file
+// select plays for a save slot), played from the game's main thread at its next controller read.
+// Not in lockstep (LAN) play, where it would change one machine's game state.
+constexpr uint32_t kGameSoundDecide = 121;
+void PlayGameSound(uint32_t id) noexcept;
+// KPADReadEx (hle/input/kpad.cpp), on the main thread: plays the sound PlayGameSound queued.
+void FlushGameSound() noexcept;
 // Animated tiles (spinning coins, ? blocks...), on by default. Saved to Config.toml.
 void SetSpinningCoins(bool enabled) noexcept;
 bool SpinningCoins() noexcept;

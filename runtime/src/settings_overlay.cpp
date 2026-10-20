@@ -14,6 +14,10 @@
 #include <dolphin/gx/GXAurora.h>
 #include "runtime_log.h"
 #include "wii_remote_input.h"
+#include "abi_bridge.h"
+#include "det_clock.h"
+#include "guest_interrupt_context.h"
+#include "memory.h"
 
 #include <imgui.h>
 #include <SDL3/SDL_events.h>
@@ -1749,6 +1753,47 @@ void SetVSync(bool enabled) noexcept {
 
 bool VSync() noexcept {
     return g_vsync.load(std::memory_order_relaxed);
+}
+
+void SetFullscreen(int mode) noexcept {
+    aurora_set_display_mode(static_cast<AuroraDisplayMode>(std::clamp(mode, 0, 2)));
+    PersistDisplayModeIfChanged();  // what aurora actually switched to
+}
+
+int Fullscreen() noexcept {
+    return static_cast<int>(aurora_get_display_mode());
+}
+
+namespace {
+std::atomic<uint32_t> g_pendingGameSound{0};
+constexpr uint32_t kSndAudioMgrInstance = 0x8042A488u;  // SndAudioMgr::sInstance
+constexpr uint32_t kStartSystemSe = 0x80195380u;        // startSystemSe__11SndAudioMgrFUiUl
+} // namespace
+
+void PlayGameSound(uint32_t id) noexcept {
+    if (!DetClock::Enabled()) {
+        g_pendingGameSound.store(id, std::memory_order_relaxed);
+    }
+}
+
+void FlushGameSound() noexcept {
+    const uint32_t id = g_pendingGameSound.exchange(0, std::memory_order_relaxed);
+    uint32_t manager = 0;
+    if (id == 0 || !Memory::TryRead32(kSndAudioMgrInstance, manager) || manager == 0) {
+        return;
+    }
+    // A call the game itself could make here: on a private copy of the reading thread's registers.
+    GuestInterruptCallbackContext call;
+    CpuContext* cpu = call.get();
+    cpu->gpr[3] = manager;
+    cpu->gpr[4] = id;
+    cpu->gpr[5] = 1;
+    InvokeIndirectCpu(kStartSystemSe, cpu);
+    static bool s_logged = false;
+    if (!s_logged) {
+        s_logged = true;
+        RT_LOGF(RT_TAG_RUNTIME, "settings: played game sound %u\n", id);
+    }
 }
 
 void SetFrameGraph(bool show) noexcept {
