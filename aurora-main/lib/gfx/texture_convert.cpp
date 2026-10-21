@@ -8,6 +8,7 @@
 #include <cmath>
 #include <limits>
 #include <optional>
+#include <thread>
 #include <vector>
 
 namespace aurora::gfx {
@@ -240,23 +241,54 @@ static ByteBuffer DecodeTiled(uint32_t width, uint32_t height, uint32_t mips, Ar
   for (uint32_t mip = 0; mip < mips; ++mip) {
     const uint32_t bwidth = (w + (T::BlockWidth - 1)) / T::BlockWidth;
     const uint32_t bheight = (h + (T::BlockHeight - 1)) / T::BlockHeight;
-    for (uint32_t by = 0; by < bheight; ++by) {
-      const uint32_t baseY = by * T::BlockHeight;
-      const uint32_t numRows = std::min(h - baseY, T::BlockHeight);
-      for (uint32_t bx = 0; bx < bwidth; ++bx) {
-        const uint32_t baseX = bx * T::BlockWidth;
-        for (uint32_t y = 0; y < numRows; ++y) {
-          auto* target = targetMip + (baseY + y) * w + baseX;
-          const auto n = std::min(w - baseX, T::BlockWidth);
-          for (uint32_t x = 0; x < n; ++x) {
-            T::decode_texel(target, in, x);
+    // Every block row's source starts a whole row of blocks after the last one's.
+    const size_t rowSource = size_t{bwidth} * T::BlockWidth * T::BlockHeight / T::Frac;
+    const auto decodeRows = [&, w, h, targetMip, in](uint32_t firstRow, uint32_t endRow) {
+      const auto* src = in + rowSource * firstRow;
+      for (uint32_t by = firstRow; by < endRow; ++by) {
+        const uint32_t baseY = by * T::BlockHeight;
+        const uint32_t numRows = std::min(h - baseY, T::BlockHeight);
+        for (uint32_t bx = 0; bx < bwidth; ++bx) {
+          const uint32_t baseX = bx * T::BlockWidth;
+          for (uint32_t y = 0; y < numRows; ++y) {
+            auto* target = targetMip + (baseY + y) * w + baseX;
+            const auto n = std::min(w - baseX, T::BlockWidth);
+            for (uint32_t x = 0; x < n; ++x) {
+              T::decode_texel(target, src, x);
+            }
+            src += T::BlockWidth / T::Frac;
           }
-          in += T::BlockWidth / T::Frac;
+          const uint32_t extraY = T::BlockHeight - numRows;
+          src += T::BlockWidth * extraY / T::Frac;
         }
-        const uint32_t extraY = T::BlockHeight - numRows;
-        in += T::BlockWidth * extraY / T::Frac;
       }
+    };
+    // NSMBW: a scene's big textures (the course's tile atlas, rebuilt on every level entry because
+    // animated tiles patch it) decode in its first frame, on the game thread; split their rows
+    // across a few threads. Each texel is written exactly as before.
+    constexpr uint32_t kParallelTexels = 256 * 256;
+    const uint32_t workers = w * h >= kParallelTexels && bheight >= 8
+                                 ? std::min(4u, std::max(1u, std::thread::hardware_concurrency()))
+                                 : 1u;
+    if (workers > 1) {
+      std::vector<std::thread> threads;
+      threads.reserve(workers - 1);
+      const uint32_t perWorker = (bheight + workers - 1) / workers;
+      for (uint32_t i = 1; i < workers; ++i) {
+        const uint32_t first = std::min(bheight, i * perWorker);
+        const uint32_t end = std::min(bheight, first + perWorker);
+        if (first < end) {
+          threads.emplace_back(decodeRows, first, end);
+        }
+      }
+      decodeRows(0, std::min(bheight, perWorker));
+      for (auto& thread : threads) {
+        thread.join();
+      }
+    } else {
+      decodeRows(0, bheight);
     }
+    in += rowSource * bheight;
     targetMip += w * h;
     if (w > 1) {
       w /= 2;

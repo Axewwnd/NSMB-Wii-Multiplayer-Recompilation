@@ -32,11 +32,12 @@ int32_t CompareSlow(uint32_t a, uint32_t b) {
 extern "C" int32_t Strcmp_HLE_802e1ab4(uint32_t a, uint32_t b)
 {
     while (true) {
-        if (!Memory::Contains(a, kWindow) || !Memory::Contains(b, kWindow)) {
+        // The inline page-table lookup: effect loading makes thousands of these calls on short names.
+        uint8_t* pa = nullptr;
+        uint8_t* pb = nullptr;
+        if (!MemoryInline::TryGetPointerFast(a, kWindow, pa) || !MemoryInline::TryGetPointerFast(b, kWindow, pb)) {
             return CompareSlow(a, b);
         }
-        const uint8_t* pa = Memory::GetPointer(a, kWindow);
-        const uint8_t* pb = Memory::GetPointer(b, kWindow);
         for (uint32_t i = 0; i < kWindow; ++i) {
             if (pa[i] != pb[i]) {
                 return static_cast<int32_t>(pa[i]) - static_cast<int32_t>(pb[i]);

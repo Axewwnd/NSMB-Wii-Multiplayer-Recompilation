@@ -305,9 +305,25 @@ extern "C" uint32_t g_dvdFstReservedBase;
 extern "C" uint32_t g_dvdFstReservedSize;
 
 // Byte-wise copy into guest RAM plus the DMA notification the GX caches need.
+// A fully writable 1 MiB page takes the bytes in one copy: Write8's fast path there is a plain
+// store with nothing tracked, and a scene's archives (hundreds of KB each) were a quarter of a
+// level's load frame on a Galaxy S26 Ultra byte by byte. Any other page (code, guarded sub-pages)
+// keeps Write8 for each byte.
 static void CopyToGuestAsDma(uint32_t dest, const uint8_t* data, size_t size) {
-    for (size_t i = 0; i < size; ++i) {
-        Memory::Write8(dest + static_cast<uint32_t>(i), data[i]);
+    size_t done = 0;
+    while (done < size) {
+        const uint32_t address = dest + static_cast<uint32_t>(done);
+        const uint32_t page = address >> MemoryInline::kPageShift;
+        const size_t pageLeft = (size_t{1} << MemoryInline::kPageShift) - (address & MemoryInline::kPageMask);
+        const size_t chunk = std::min(size - done, pageLeft);
+        if (const uintptr_t bias = MemoryInline::g_fullWritablePageBias[page]; bias != 0) {
+            std::memcpy(reinterpret_cast<uint8_t*>((bias - 1u) + address), data + done, chunk);
+        } else {
+            for (size_t i = 0; i < chunk; ++i) {
+                Memory::Write8(address + static_cast<uint32_t>(i), data[done + i]);
+            }
+        }
+        done += chunk;
     }
     GxNotifyGuestRamDmaWrite(dest, static_cast<uint32_t>(size));
 }
