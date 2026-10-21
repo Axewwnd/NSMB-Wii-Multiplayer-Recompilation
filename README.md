@@ -126,7 +126,7 @@ On Android, the app can open straight into the game; Back > **Start Menu** bring
 | --- | --- | --- | --- | --- |
 | Samsung Galaxy S26 Ultra (SM-S948U) | Qualcomm Snapdragon 8 Elite Gen 5 for Galaxy (SM8850) | Adreno 840 | 16 | 60 fps, LAN play |
 | T-Mobile REVVL 7 5G (TMRV075G) | Qualcomm Snapdragon 6 Gen 1 (SM6450) | Adreno 710 | 14 | 60 fps, LAN play |
-| Google Pixel 3 XL | Qualcomm Snapdragon 845 (SDM845) | Adreno 630 | 12 | 60 fps (the world map 45-50 once the phone is hot), LAN play |
+| Google Pixel 3 XL | Qualcomm Snapdragon 845 (SDM845) | Adreno 630 | 12 | 60 fps (thanks to v0.2.2 performance), LAN play |
 | LG V30+ (LS998) | Qualcomm Snapdragon 835 (MSM8998) | Adreno 540 | 8.0 | Not supported: needs Android 11 and Vulkan 1.1 |
 | Windows 10 PC | AMD Ryzen 5 5600G | NVIDIA GeForce RTX 5070 | - | 60 fps, LAN play with the phones |
 | Windows PC | AMD Ryzen 7 5700X3D | NVIDIA GeForce RTX 5070 Ti | - | 60 fps, LAN play |
