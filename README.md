@@ -84,9 +84,10 @@ level's pause window (between Continue and Exit Course).
 **Video:** Match Screen Resolution, the resolution multiplier (greyed out while matching the
 screen; on a wide screen each scale comes as "1x (480p)" with black bars or "1x Ultrawide" filling
 the screen), Show FPS Counter (off by default), Frametime Graph (each frame's time, drawn under
-the FPS counter; off by default), Spinning Coins (animated coins and blocks, on by default) and, on
-Windows, V-Sync (no tearing: the game's clock follows the display's refresh, one frame per refresh at
-60 Hz or every third at 180 Hz; off by default). On Windows and Linux, **Fullscreen**: Off, Borderless
+the FPS counter; off by default; with V-Sync on it shows how many screen refreshes each frame was up
+for), Spinning Coins (animated coins and blocks, on by default) and, on Windows and Android, V-Sync
+(no tearing: the game's clock follows the display's refresh, one frame per refresh at 60 Hz or every
+third at 180 Hz; off by default on Windows, on by default on Android). On Windows and Linux, **Fullscreen**: Off, Borderless
 (a window covering the screen, as F11 toggles) or Exclusive (the game takes over the display); each
 press moves to the next. **Audio:** Master, Music and Sound Effects
 sliders, each with its percentage beside it; drag one (finger or mouse) or move it 5% at a time with
@@ -107,7 +108,7 @@ window or the world map's menu open, it pauses without the backup: that menu has
 
 **Settings.**
 On Android, **Settings** on the start menu holds Display (aspect ratio, render resolution, FPS
-counter, frametime graph, spinning coins, graphics compatibility) and Controls; in the game, the
+counter, frametime graph, spinning coins, V-Sync, graphics compatibility) and Controls; in the game, the
 phone's Back gesture offers Start Menu, Leave LAN Game and Quit. On Windows, press **F10** for the settings bar. Everything you
 change is saved and restored next launch.
 
@@ -183,16 +184,16 @@ The app's start screen shows these steps until a game is imported, and **Help** 
 Download from the [Releases](https://github.com/WitherBlitz/NSMB-Wii-Multiplayer-Recompilation/releases/latest)
 page:
 
-- **Android:** `NSMBW-0.2.1-android-arm64.apk`. Open it on your phone and allow installing from that
+- **Android:** `NSMBW-0.2.2-android-arm64.apk`. Open it on your phone and allow installing from that
   app when Android asks. Updates install over it and keep your saves and game files.
-- **Windows:** `NSMBW-0.2.1-windows-x64.zip`. Extract it anywhere and run `NSMBW.exe`. Settings
+- **Windows:** `NSMBW-0.2.2-windows-x64.zip`. Extract it anywhere and run `NSMBW.exe`. Settings
   (including where your game files are), saves and caches live in `Documents\MarioWiiSaveData`, so a
   new version, extracted anywhere, carries on where the last one left off. The first start of 0.0.8 or
   later takes over the data of an older version extracted in the same folder (or of the version it
   replaces). On a processor without AVX2 (older than Intel Haswell or AMD Excavator), `NSMBW.exe`
   starts `compat\NSMBW-compat.exe` by itself: the same game, with its math done the long way, so it
   still plays LAN games with everyone else. Keep the `compat` folder next to `NSMBW.exe`.
-- **Linux:** `NSMBW-0.2.1-linux-x86_64.tar.gz`. Extract it anywhere and run `./NSMBW`. The first start
+- **Linux:** `NSMBW-0.2.2-linux-x86_64.tar.gz`. Extract it anywhere and run `./NSMBW`. The first start
   asks for the extracted game folder (with zenity or kdialog; or put the folder next to `NSMBW`,
   named `game`). Settings, saves and caches live in `~/.local/share/WiiCompiled`
   (`$XDG_DATA_HOME/WiiCompiled` if set). Older processors get `compat/NSMBW-compat` automatically, as
@@ -322,7 +323,7 @@ Open an issue with your device, what you did, and the log from `Documents\MarioW
 (Windows) or `~/.local/share/WiiCompiled/Logs` (Linux).
 
 **Is it done?**
-No, this is 0.2.1. It boots and plays on the tested devices, but not every level has been checked,
+No, this is 0.2.2. It boots and plays on the tested devices, but not every level has been checked,
 and rendering, performance and LAN play are still being worked on.
 
 ## AI usage
