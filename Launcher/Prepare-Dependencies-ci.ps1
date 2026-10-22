@@ -31,8 +31,8 @@ $packages = @(
         Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/abseil/abseil-cpp/archive/refs/tags/20240722.0.tar.gz' })
     },
     [pscustomobject]@{
-        Name = 'mbedtls'; File = 'mbedtls-3.6.7.tar.gz'
-        Uris = @('https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.gz')
+        Name = 'mbedtls'; File = 'mbedtls-3.6.7.tar.bz2'
+        Uris = @('https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2')
         Pins = @(@{ File = (Join-Path $repoRoot 'runtime\cmake\MbedTLSPin.cmake'); Text = '3.6.7' })
     },
     [pscustomobject]@{
