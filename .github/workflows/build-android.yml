@@ -103,15 +103,15 @@ jobs:
 
       - name: Configure Android Build
         shell: pwsh
-        run: ./projects/nsmbw/tools/configure-android.ps1
+        run: ./projects/nsmbw/tools/configure-android-ci.ps1
 
       - name: Build Android Native (libmain.so)
         shell: pwsh
-        run: ./projects/nsmbw/tools/build-android.ps1
+        run: ./projects/nsmbw/tools/build-android-ci.ps1
 
       - name: Stage Android (copy libmain.so + assets to app)
         shell: pwsh
-        run: ./projects/nsmbw/tools/stage-android.ps1 -NativeDirectory android/native
+        run: ./projects/nsmbw/tools/stage-android-ci.ps1
 
       - name: Build APK (Gradle)
         run: gradle -p android assembleRelease
