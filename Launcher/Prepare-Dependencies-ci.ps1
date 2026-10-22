@@ -14,6 +14,7 @@ $auroraExtern = Join-Path $repoRoot 'aurora-main\extern\CMakeLists.txt'
 $auroraLibUsb = Join-Path $repoRoot 'aurora-main\cmake\AuroraLibUSB.cmake'
 $auroraSdl = Join-Path $repoRoot 'aurora-main\cmake\AuroraSDL3Provider.cmake'
 $auroraDawn = Join-Path $repoRoot 'aurora-main\cmake\AuroraDawnProvider.cmake'
+$runtimeCMake = Join-Path $repoRoot 'runtime\CMakeLists.txt'
 
 # Android CI packages: same as Prepare-Dependencies.ps1 but WITHOUT cppwinrt-tool and dawn_prebuilt (Windows only)
 # INCLUDES dawn_prebuilt_android (pinned v20260603.191052 for aarch64)
@@ -28,6 +29,11 @@ $packages = @(
         Name = 'abseil-cpp'; File = 'abseil-cpp-20240722.0.tar.gz'
         Uris = @('https://github.com/abseil/abseil-cpp/archive/refs/tags/20240722.0.tar.gz')
         Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/abseil/abseil-cpp/archive/refs/tags/20240722.0.tar.gz' })
+    },
+    [pscustomobject]@{
+        Name = 'mbedtls'; File = 'mbedtls-3.6.7.tar.gz'
+        Uris = @('https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/mbedtls-3.6.7.tar.gz')
+        Pins = @(@{ File = $runtimeCMake; Text = 'mbedtls-3.6.7' })
     },
     [pscustomobject]@{
         Name = 'dawn_prebuilt_android'; File = 'dawn-v20260603.191052-android-aarch64.tar.gz'
