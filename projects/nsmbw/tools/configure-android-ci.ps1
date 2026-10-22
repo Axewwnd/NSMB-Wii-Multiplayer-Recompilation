@@ -50,7 +50,7 @@ $configure = @(
     '-DANDROID_STL=c++_static',
     '-DCMAKE_BUILD_TYPE=Release',
     '-DAURORA_DAWN_PROVIDER=package', '-DAURORA_SDL3_PROVIDER=vendor',
-    '-DCMAKE_POLICY_DEFAULT_CMP0168=NEW', '-DFETCHCONTENT_FULLY_DISCONNECTED=ON',
+    '-DCMAKE_POLICY_DEFAULT_CMP0168=NEW',
     # Target ARMv8-A baseline (Cortex-A53/A73 compatible) for Kryo 265 (Snapdragon 680)
     # Avoids SIGILL from CRC32/AES/LSE/Atomics instructions not present on older ARMv8 cores
     '-DCMAKE_C_FLAGS=-march=armv8-a',
