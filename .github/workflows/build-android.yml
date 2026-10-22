@@ -49,11 +49,20 @@ jobs:
       - name: Run Translator (generate build shards)
         shell: pwsh
         run: |
-          $ws = $PSScriptRoot
+          # Use GITHUB_WORKSPACE for reliable repo root path
+          $ws = $env:GITHUB_WORKSPACE
+          if (-not $ws) { $ws = $PSScriptRoot; for ($i=0;$i-lt 3;$i++) { $ws = Split-Path $ws } }
           $translator = Join-Path $ws 'translator/src/Translator.Cli/bin/Release/net8.0/Translator.Cli.dll'
           $project = 'projects/nsmbw/recomp.yml'
           $logs = Join-Path $ws 'build-nsmbw/logs'
           New-Item -ItemType Directory -Force -Path $logs | Out-Null
+
+          # Verify translator exists
+          if (-not (Test-Path $translator)) {
+              Write-Error "Translator not found at $translator"
+              Get-ChildItem (Join-Path $ws 'translator/src/Translator.Cli/bin/Release/net8.0/') -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
+              throw "Translator.Cli.dll not found at expected path"
+          }
 
           function Invoke-Step([string]$Name, [string[]]$Arguments) {
               $log = Join-Path $logs "rebuild-$Name.log"
@@ -61,7 +70,7 @@ jobs:
               & dotnet $translator @Arguments 2>&1 | ForEach-Object { "$_" } | Out-File -LiteralPath $log -Encoding utf8
               $code = $LASTEXITCODE
               $ErrorActionPreference = 'Stop'
-              if ($code -ne 0) { Get-Content $log -Tail 20; throw "translator step '$Name' failed ($code); see $log" }
+              if ($code -ne 0) { Get-Content $log -Tail 30; throw "translator step '$Name' failed ($code); see $log" }
               "$Name ok"
           }
 
