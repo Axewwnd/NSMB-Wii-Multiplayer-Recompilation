@@ -46,6 +46,42 @@ jobs:
       - name: Build Translator
         run: dotnet build translator/Translator.sln -c Release --no-restore
 
+      - name: Run Translator (generate build shards)
+        shell: pwsh
+        run: |
+          $ws = $PSScriptRoot
+          $translator = Join-Path $ws 'translator/src/Translator.Cli/bin/Release/net8.0/Translator.Cli.dll'
+          $project = 'projects/nsmbw/recomp.yml'
+          $logs = Join-Path $ws 'build-nsmbw/logs'
+          New-Item -ItemType Directory -Force -Path $logs | Out-Null
+
+          function Invoke-Step([string]$Name, [string[]]$Arguments) {
+              $log = Join-Path $logs "rebuild-$Name.log"
+              $ErrorActionPreference = 'Continue'
+              & dotnet $translator @Arguments 2>&1 | ForEach-Object { "$_" } | Out-File -LiteralPath $log -Encoding utf8
+              $code = $LASTEXITCODE
+              $ErrorActionPreference = 'Stop'
+              if ($code -ne 0) { Get-Content $log -Tail 20; throw "translator step '$Name' failed ($code); see $log" }
+              "$Name ok"
+          }
+
+          Push-Location $ws
+          try {
+              Invoke-Step 'translate' @('translate-recursive', '0x80004050', '--project', $project,
+                  '--outdir', 'generated/functions', '--output-metadata', 'generated/base_translation_output.json',
+                  '--production-source-bundle', 'generated/base_translation_sources.bin',
+                  '--no-function-files', '--prune-stale', '--threads', '6')
+              Invoke-Step 'manifest' @('emit-base-manifest', '--project', $project, '--out', 'build/base',
+                  '--functions-dir', 'generated/functions', '--translation-output-metadata',
+                  'generated/base_translation_output.json', '--region', 'E')
+              Invoke-Step 'data-init' @('generate-data-init', '--project', $project)
+              Invoke-Step 'shards' @('emit-build-shards', '--project', $project, '--base-metadata',
+                  'generated/base_translation_output.json', '--base-functions-dir', 'generated/functions',
+                  '--native-source-dir', 'runtime/src', '--out', 'generated/build_shards')
+          } finally {
+              Pop-Location
+          }
+
       - name: Install Android SDK/NDK
         uses: android-actions/setup-android@v3
         with:
