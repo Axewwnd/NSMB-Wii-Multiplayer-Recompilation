@@ -71,7 +71,8 @@ if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Forc
 
 # Windows PowerShell 5.1 turns a native program's stderr lines into error records; CMake prints
 # ordinary status there, so run it with 'Continue' and keep the log as plain text.
+# Also output to stdout so CI logs show the error.
 $ErrorActionPreference = 'Continue'
 & (Join-Path $portableTools 'CMake\bin\cmake.exe') @configure 2>&1 |
-    ForEach-Object { "$_" } | Out-File -LiteralPath $LogPath -Encoding utf8
+    ForEach-Object { "$_" } | Tee-Object -FilePath $LogPath -Encoding utf8
 exit $LASTEXITCODE
