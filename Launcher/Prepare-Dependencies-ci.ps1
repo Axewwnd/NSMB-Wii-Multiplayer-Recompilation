@@ -13,8 +13,10 @@ $auroraCMake = Join-Path $repoRoot 'aurora-main\CMakeLists.txt'
 $auroraExtern = Join-Path $repoRoot 'aurora-main\extern\CMakeLists.txt'
 $auroraLibUsb = Join-Path $repoRoot 'aurora-main\cmake\AuroraLibUSB.cmake'
 $auroraSdl = Join-Path $repoRoot 'aurora-main\cmake\AuroraSDL3Provider.cmake'
+$auroraDawn = Join-Path $repoRoot 'aurora-main\cmake\AuroraDawnProvider.cmake'
 
 # Android CI packages: same as Prepare-Dependencies.ps1 but WITHOUT cppwinrt-tool and dawn_prebuilt (Windows only)
+# INCLUDES dawn_prebuilt_android (pinned v20260603.191052 for aarch64)
 $packages = @(
     [pscustomobject]@{
         Name = 'SDL'; File = 'SDL3-3.4.4.tar.gz'
@@ -26,6 +28,12 @@ $packages = @(
         Name = 'abseil-cpp'; File = 'abseil-cpp-20240722.0.tar.gz'
         Uris = @('https://github.com/abseil/abseil-cpp/archive/refs/tags/20240722.0.tar.gz')
         Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/abseil/abseil-cpp/archive/refs/tags/20240722.0.tar.gz' })
+    },
+    [pscustomobject]@{
+        Name = 'dawn_prebuilt_android'; File = 'dawn-v20260603.191052-android-aarch64.tar.gz'
+        Uris = @('https://github.com/theofficialgman/dawn-build/releases/download/v20260603.191052/dawn-android-aarch64.tar.gz')
+        Pins = @(@{ File = $auroraCMake; Text = 'set(AURORA_DAWN_VERSION "v20260603.191052"' },
+                 @{ File = $auroraDawn; Text = 'SHA256=0e63e8cbf53551f703f582d1306f4257c0380353f66b53369d96952ce6d9f934' })
     },
     [pscustomobject]@{
         Name = 'fmt'; File = 'fmt-11.1.4.tar.gz'
