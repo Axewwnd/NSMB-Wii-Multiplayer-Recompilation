@@ -1,0 +1,190 @@
+{
+  "image_start": "0x807684C0",
+  "image_end": "0x80B8E340",
+  "modules": [
+    {
+      "id": 1,
+      "name": "d_profileNP",
+      "image": "0x807684C0",
+      "fix_size": "0x4F84",
+      "bss": "0x8076D460",
+      "bss_size": "0x208",
+      "end": "0x8076D668",
+      "prolog": "0x807685A0",
+      "epilog": "0x807685D0",
+      "unresolved": "0x80768600",
+      "ctors": "0x8076A558-0x8076A560",
+      "dtors": "0x8076A560-0x8076A56C",
+      "sections": {
+        "1": {
+          "addr": "0x807685A0",
+          "size": "0x1FB8",
+          "exec": true
+        },
+        "2": {
+          "addr": "0x8076A558",
+          "size": "0x8",
+          "exec": false
+        },
+        "3": {
+          "addr": "0x8076A560",
+          "size": "0xC",
+          "exec": false
+        },
+        "4": {
+          "addr": "0x8076A570",
+          "size": "0x1D8",
+          "exec": false
+        },
+        "5": {
+          "addr": "0x8076A748",
+          "size": "0x15FC",
+          "exec": false
+        },
+        "6": {
+          "addr": "0x8076D460",
+          "size": "0x208",
+          "exec": false
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "d_basesNP",
+      "image": "0x8076D680",
+      "fix_size": "0x223198",
+      "bss": "0x80990820",
+      "bss_size": "0x12484",
+      "end": "0x809A2CA4",
+      "prolog": "0x8076D770",
+      "epilog": "0x8076D7A0",
+      "unresolved": "0x8076D7D0",
+      "ctors": "0x80933774-0x80933C70",
+      "dtors": "0x80933C70-0x80933C7C",
+      "sections": {
+        "1": {
+          "addr": "0x8076D770",
+          "size": "0x1C6004",
+          "exec": true
+        },
+        "2": {
+          "addr": "0x80933774",
+          "size": "0x4FC",
+          "exec": false
+        },
+        "3": {
+          "addr": "0x80933C70",
+          "size": "0xC",
+          "exec": false
+        },
+        "4": {
+          "addr": "0x80933C80",
+          "size": "0xA5FC",
+          "exec": false
+        },
+        "5": {
+          "addr": "0x8093E280",
+          "size": "0x51CB8",
+          "exec": false
+        },
+        "6": {
+          "addr": "0x80990820",
+          "size": "0x12484",
+          "exec": false
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "d_enemiesNP",
+      "image": "0x809A2CC0",
+      "fix_size": "0x16E780",
+      "bss": "0x80B11440",
+      "bss_size": "0xB4E0",
+      "end": "0x80B1C920",
+      "prolog": "0x809A2DB0",
+      "epilog": "0x809A2DE0",
+      "unresolved": "0x809A2E10",
+      "ctors": "0x80ACD1D8-0x80ACD464",
+      "dtors": "0x80ACD464-0x80ACD470",
+      "sections": {
+        "1": {
+          "addr": "0x809A2DB0",
+          "size": "0x12A428",
+          "exec": true
+        },
+        "2": {
+          "addr": "0x80ACD1D8",
+          "size": "0x28C",
+          "exec": false
+        },
+        "3": {
+          "addr": "0x80ACD464",
+          "size": "0xC",
+          "exec": false
+        },
+        "4": {
+          "addr": "0x80ACD470",
+          "size": "0x8610",
+          "exec": false
+        },
+        "5": {
+          "addr": "0x80AD5A80",
+          "size": "0x3B678",
+          "exec": false
+        },
+        "6": {
+          "addr": "0x80B11440",
+          "size": "0xB4E0",
+          "exec": false
+        }
+      }
+    },
+    {
+      "id": 4,
+      "name": "d_en_bossNP",
+      "image": "0x80B1C940",
+      "fix_size": "0x6D170",
+      "bss": "0x80B89AC0",
+      "bss_size": "0x487C",
+      "end": "0x80B8E33C",
+      "prolog": "0x80B1CA30",
+      "epilog": "0x80B1CA60",
+      "unresolved": "0x80B1CA90",
+      "ctors": "0x80B73A5C-0x80B73AC8",
+      "dtors": "0x80B73AC8-0x80B73AD4",
+      "sections": {
+        "1": {
+          "addr": "0x80B1CA30",
+          "size": "0x5702C",
+          "exec": true
+        },
+        "2": {
+          "addr": "0x80B73A5C",
+          "size": "0x6C",
+          "exec": false
+        },
+        "3": {
+          "addr": "0x80B73AC8",
+          "size": "0xC",
+          "exec": false
+        },
+        "4": {
+          "addr": "0x80B73AD8",
+          "size": "0x21F0",
+          "exec": false
+        },
+        "5": {
+          "addr": "0x80B75CC8",
+          "size": "0x13520",
+          "exec": false
+        },
+        "6": {
+          "addr": "0x80B89AC0",
+          "size": "0x487C",
+          "exec": false
+        }
+      }
+    }
+  ]
+}
