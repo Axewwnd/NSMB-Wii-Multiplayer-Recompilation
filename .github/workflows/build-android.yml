@@ -73,7 +73,7 @@ jobs:
 
       - name: Prepare Dependencies (Dawn prebuilt, etc.)
         shell: pwsh
-        run: ./Launcher/Prepare-Dependencies.ps1
+        run: ./Launcher/Prepare-Dependencies-ci.ps1
 
       - name: Verify Game Data Exists
         shell: pwsh
