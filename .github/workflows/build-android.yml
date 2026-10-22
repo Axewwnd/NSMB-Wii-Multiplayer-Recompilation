@@ -1,0 +1,125 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: 'Build type'
+        required: true
+        default: 'Release'
+        type: choice
+        options:
+          - Release
+          - Debug
+
+permissions:
+  contents: read
+
+jobs:
+  build-android:
+    name: Android arm64-v8a (NDK 29)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      NDK_VERSION: '29.0.14206865'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Cache NuGet
+        uses: actions/cache@v5
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('translator/Translator.sln', '**/*.csproj') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      - name: Restore Translator
+        run: dotnet restore translator/Translator.sln
+
+      - name: Build Translator
+        run: dotnet build translator/Translator.sln -c Release --no-restore
+
+      - name: Install Android SDK/NDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 34
+          ndk-version: ${{ env.NDK_VERSION }}
+          build-tools-version: '34.0.0'
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Cache Gradle
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('android/**/*.gradle*', 'android/gradle.properties') }}
+          restore-keys: ${{ runner.os }}-gradle-
+
+      - name: Prepare Portable Tools (LLVM-MinGW, CMake, Ninja)
+        shell: pwsh
+        run: ./Launcher/Prepare-PortableTools.ps1
+
+      - name: Prepare Dependencies (Dawn prebuilt, etc.)
+        shell: pwsh
+        run: ./Launcher/Prepare-Dependencies.ps1
+
+      - name: Verify Game Data Exists
+        shell: pwsh
+        run: |
+          Write-Warning "=================================================="
+          Write-Warning "REQUIRED: Extracted SMNE01 rev 1 game folder at ./game/"
+          Write-Warning "Generate locally: python projects/nsmbw/tools/unpack_game.py <extracted>"
+          Write-Warning "Then: python projects/nsmbw/tools/prelink_rels.py"
+          Write-Warning "Upload ./game folder as artifact or place in repo root"
+          Write-Warning "=================================================="
+          if (-not (Test-Path "game/main.dol")) {
+            Write-Error "game/main.dol not found! Provide extracted game data."
+            exit 1
+          }
+          if (-not (Test-Path "game/nsmbw_linked.rel")) {
+            Write-Error "game/nsmbw_linked.rel not found! Run prelink_rels.py."
+            exit 1
+          }
+
+      - name: Unpack & Prelink RELs (if game folder is raw extraction)
+        shell: pwsh
+        run: |
+          # If game/main.dol exists but nsmbw_linked.rel doesn't, run prelink
+          if (-not (Test-Path "game/nsmbw_linked.rel")) {
+            python projects/nsmbw/tools/prelink_rels.py
+          }
+
+      - name: Configure Android Build
+        shell: pwsh
+        run: ./projects/nsmbw/tools/configure-android.ps1
+
+      - name: Build Android Native (libmain.so)
+        shell: pwsh
+        run: ./projects/nsmbw/tools/build-android.ps1
+
+      - name: Stage Android (copy libmain.so + assets to app)
+        shell: pwsh
+        run: ./projects/nsmbw/tools/stage-android.ps1 -NativeDirectory android/native
+
+      - name: Build APK (Gradle)
+        run: gradle -p android assembleRelease
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: NSMBW-Android-arm64-${{ github.run_number }}
+          path: android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 30
