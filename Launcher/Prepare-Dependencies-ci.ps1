@@ -32,8 +32,8 @@ $packages = @(
     },
     [pscustomobject]@{
         Name = 'mbedtls'; File = 'mbedtls-3.6.7.tar.gz'
-        Uris = @('https://github.com/Mbed-TLS/mbedtls/archive/refs/tags/mbedtls-3.6.7.tar.gz')
-        Pins = @(@{ File = $runtimeCMake; Text = 'mbedtls-3.6.7' })
+        Uris = @('https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.gz')
+        Pins = @(@{ File = (Join-Path $repoRoot 'runtime\cmake\MbedTLSPin.cmake'); Text = '3.6.7' })
     },
     [pscustomobject]@{
         Name = 'dawn_prebuilt_android'; File = 'dawn-v20260603.191052-android-aarch64.tar.gz'
