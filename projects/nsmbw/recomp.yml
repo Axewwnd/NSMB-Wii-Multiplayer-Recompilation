@@ -20,10 +20,10 @@ memory:
 
 inputs:
   dol:
-    path: ../game/main.dol
+    path: ../../game/main.dol
     sha256: 6d755ec24c395fee600a856a85785e0e99c0b7ecb680d573a6cdd1aa6f7beee7
   rel:
-    path: ../game/nsmbw_linked.rel
+    path: ../../game/nsmbw_linked.rel
     load_address: 0x807684C0
 
 translation:
