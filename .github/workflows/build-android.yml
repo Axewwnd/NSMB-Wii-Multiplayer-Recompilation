@@ -362,7 +362,7 @@ jobs:
               Assert-Pinned $package
               $target = Join-Path $Destination $package.Name
               if (Test-Path -LiteralPath $target -PathType Container) { continue }
-              # For dawn_prebuilt_android use SHA256 verification, for others use tar
+              # For dawn_prebuilt_android use SHA256 verification + tar (Expand-Archive fails on tar.gz)
               if ($package.Name -eq 'dawn_prebuilt_android') {
                   $archive = Get-Archive $package
                   if (-not (Test-Path -LiteralPath $archive -PathType Leaf) -or
@@ -371,9 +371,14 @@ jobs:
                   }
                   $extract = Join-Path $Destination ('.extract-' + $package.Name)
                   if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
-                  Expand-Archive -LiteralPath $archive -DestinationPath $extract
+                  [IO.Directory]::CreateDirectory($extract) | Out-Null
+                  & $tar -xf $archive -C $extract
+                  if ($LASTEXITCODE -ne 0) { throw "Extracting $archive failed with exit code $LASTEXITCODE." }
+                  $entries = @(Get-ChildItem -LiteralPath $extract -Force)
                   $source = $extract
+                  if ($entries.Count -eq 1 -and $entries[0].PSIsContainer) { $source = $entries[0].FullName }
                   if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "$($package.Name) archive layout changed." }
+                  if (Test-Path -LiteralPath $target) { Remove-Item -LiteralPath $target -Recurse -Force }
                   Move-Item -LiteralPath $source -Destination $target
                   if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
               } else {
