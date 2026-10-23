@@ -97,8 +97,8 @@ jobs:
           packages: 'platforms;android-34 build-tools;34.0.0 ndk;29.0.14206865'
           accept-android-sdk-licenses: 'true'
 
-      - name: Fix NDK sysroot API 28 -> 30 symlink (Linux CI runner)
-        if: runner.os == 'Linux'
+      - name: Fix NDK sysroot API 28 -> 30 symlink (CI runner)
+        # The CI runner (windows-latest) uses Linux-style NDK paths. Create symlink from API 30 to API 28.
         run: |
           NDK_PATH="/usr/local/lib/android/sdk/ndk/29.0.14206865"
           SYSROOT="${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android"
