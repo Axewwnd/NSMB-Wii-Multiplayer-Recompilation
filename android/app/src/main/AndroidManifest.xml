@@ -35,12 +35,12 @@
             </intent-filter>
         </activity>
 
-        <!-- The game runs in its own process: the native runtime is built to start once per
-             process, so leaving the game always ends that process and the next start is fresh. -->
+        <!-- The game runs in the main process. Previously used a separate ":game" process
+             for a fresh native runtime on each start, but MIUI's SwipeUpClean kills
+             isolated processes aggressively even when the activity is visible. -->
         <activity
             android:name=".GameActivity"
             android:exported="false"
-            android:process=":game"
             android:launchMode="singleTask"
             android:screenOrientation="sensorLandscape"
             android:resizeableActivity="false"
