@@ -1,238 +1,182 @@
-# PHOENIX HANDOFF — NSMB Wii Multiplayer Recompilation APK for Redmi Note 11 (spes)
+# PHOENIX HANDOFF — NSMB Wii Multiplayer Recompilation en Redmi Note 11 (spes)
 
-**Repositorio:** https://github.com/Axewwnd/NSMB-Wii-Multiplayer-Recompilation  
-**Upstream:** https://github.com/WitherBlitz/NSMB-Wii-Multiplayer-Recompilation  
-**Fecha:** 2026-10-23  
-**Rama actual:** `main` (sincronizada con origin/main)
-
----
-
-## 1. Objetivo del proyecto (Codename PHOENIX)
-
-Compilar un **APK Android ARM64 (arm64-v8a)** que:
-- Funcione en **Redmi Note 11 (codename `spes`)**: Snapdragon 680, CPU Kryo 265 (Cortex-A53/A73), GPU Adreno 610
-- Android 11+ (API 30), Vulkan 1.1+
-- Incluya la opción **"Import from Extracted Game Data Folder"** para que el usuario importe sus datos del juego en el dispositivo
-- **No requiera recompilar el juego en CI** — el APK debe contener `libmain.so` ya compilado
-- **Baseline ARMv8-A** (`-march=armv8-a`) para evitar `SIGILL` por instrucciones CRC32/AES/LSE/Atomics no presentes en Kryo 265
+**Fork:** https://github.com/Axewwnd/NSMB-Wii-Multiplayer-Recompilation
+**Upstream:** https://github.com/WitherBlitz/NSMB-Wii-Multiplayer-Recompilation
+**Última actualización:** 2026-10-23 (sesión de diagnóstico de pantalla negra; ver §9)
 
 ---
 
-## 2. Arquitectura y problema original
+## 1. Objetivo
 
-### Flujo de compilación original (upstream, Windows local)
-1. **Translator (.NET 8)**: Convierte `main.dol` + RELs → C++ (`generated/functions/`, `generated/build_shards/`)
-2. **CMake + Ninja + NDK 29 (clang)**: Compila runtime + juego traducido + dependencias (SDL3, Dawn, abseil, fmt, freetype, imgui, libusb, libpng, sqlite3, tracy, xxhash, zlib, zstd, MbedTLS) → **`libmain.so`** (única biblioteca nativa)
-3. **stage-android.ps1**: `llvm-strip` de `libmain.so` → `android/native/jniLibs/arm64-v8a/libmain.so` + assets runtime → `android/native/assets/runtime/`
-4. **Gradle**: Compila `android/app` → **APK final** con `libmain.so` embebido
-
-### Problema original
-El APK precompilado (release oficial) fallaba en `spes` con **`SIGILL (Illegal Instruction)`** al parsear `Config.toml`.  
-**Hipótesis confirmada por análisis previo**: `libmain.so` compilado con instrucciones ARMv8.2+ (CRC32, AES, LSE, atomics) que **Kryo 265 no soporta** (baseline ARMv8-A / Cortex-A53/A73).
-
-### Solución aplicada en código fuente
-- `projects/nsmbw/tools/configure-android.ps1` (original) ya incluye:
-  ```powershell
-  '-DCMAKE_C_FLAGS=-march=armv8-a',
-  '-DCMAKE_CXX_FLAGS=-march=armv8-a',
-  ```
-- `recomp.yml` ya apunta a `game/main.dol` (repo root) con SHA256 verificado: `166eb6b7cca21418e316a6cfbf1bfbf0a213eb8f6396d42126a1482bb764a955`
+APK ARM64 (`arm64-v8a`) que arranque en un **Redmi Note 11 `spes`**: Snapdragon 680,
+Kryo 265 (4× Cortex-A73 + 4× Cortex-A53, **ARMv8.0-A**), Adreno 610, Android 11+ (API 30).
+Síntoma original del APK oficial: **`SIGILL`** al procesar `Config.toml`.
 
 ---
 
-## 3. Estado real del repositorio (verificado 2026-10-23)
+## 2. Estado real del repositorio al reiniciar
 
-### Commits recientes (main)
-```
-23713a8 ci: fix NDK version pin and Android dependencies
-611a1cf ci: restore original build mechanism with proper Android workflow
-b79d15f ci: use original Windows build scripts with proper CI paths
-c5afa5f ci: add Android API 30 platform and fix NDK sysroot symlink
-d220960 ci: add explicit linker flags to force API 30 libraries
-... (parches temporales de CI previos)
+| Dato | Valor |
+|---|---|
+| Rama | `main`, árbol limpio |
+| Upstream | fork **al día**: `git log HEAD..upstream/main` vacío; merge-base = `b8f94c2` (HEAD de upstream) |
+| Workflows | `build.yml`, `package.yml`, `recomp-test.yml` (upstream) + **`build-android.yml` (solo del fork, no existe en upstream)** |
+| Release upstream | `v0.2.2` con `NSMBW-0.2.2-android-arm64.apk` (compilado con NDK r29, clang 21) |
+| Datos de juego | `game/` commiteado por el fork (upstream espera `../game/`) |
+| Entorno local | Void Linux, sin Android SDK/NDK; **sin dispositivo ADB conectado**; `gh` autenticado como `Axewwnd` |
+
+### Datos del handoff anterior que eran **falsos** (corregidos aquí)
+
+- Decía que `-march=armv8-a` "ya estaba en el script original": **no**, lo agregó el fork, y además **no tenía efecto** (§3).
+- Decía `main.dol` de 3.019.336 bytes: son **3.491.808**.
+- Citaba el commit actual como `23713a8`: al reiniciar era `85bb6e4`.
+
+---
+
+## 3. Causa raíz (CONFIRMADA en código, no supuesta)
+
+`runtime/cmake/PublicProducts.cmake`, rama `MKW_PLATFORM_ANDROID`:
+
+```cmake
+set(MKW_BASELINE_ARCH_FLAG -march=armv8.2-a)   # aplicado a TODOS los targets del producto
 ```
 
-### Archivos eliminados (scripts CI alternativos — **NO restaurar**)
-- `projects/nsmbw/tools/configure-android-ci.ps1` ❌
-- `projects/nsmbw/tools/build-android-ci.ps1` ❌
-- `projects/nsmbw/tools/stage-android-ci.ps1` ❌
-- `Launcher/Prepare-Dependencies-ci.ps1` ❌
+`-march=armv8.2-a` habilita **LSE** (CAS/LDADD/SWP atómicos) y **RCpc** (LDAPR).
+Cortex-A73/A53 (Kryo 265) son ARMv8.0-A y **no implementan LSE**: la primera operación
+atómica o load-acquire ejecuta una instrucción ilegal → `SIGILL`. Coincide con el crash al
+parsear `Config.toml` (mutex/atomics/refcount de `std::`).
 
-### Archivos originales restaurados (usar estos)
-- `projects/nsmbw/tools/configure-android.ps1` ✅ (contiene `-march=armv8-a`)
-- `projects/nsmbw/tools/build-android.ps1` ✅
-- `projects/nsmbw/tools/stage-android.ps1` ✅
-- `Launcher/Prepare-PortableTools.ps1` ✅
-- `Launcher/Prepare-Dependencies.ps1` ✅ (para Windows; CI usa versión inline adaptada)
+Los `-DCMAKE_C_FLAGS=-DCMAKE_CXX_FLAGS=-march=armv8-a` del fork en `configure-android.ps1`
+**nunca sirvieron**: se aplican antes y el flag por-target de `PublicProducts.cmake` los pisa.
 
-### Datos del juego (ya en repo, **no tocar**)
+### Verificaciones hechas
+
+- **Dawn prebuilt** (`dawn-android-aarch64` v20260603.191052, SHA256 `0e63e8cb…` verificado
+  contra el pin): 835 objetos, 823 con código, **11.012.256 bytes** de código desensamblados,
+  **0 instrucciones LSE/RCpc**. El prebuilt no es la fuente del SIGILL → basta recompilar lo nuestro.
+- El APK oficial v0.2.2 declara en `.comment`: `Android clang 21.0.0`, NDK r29, `for Android 30`.
+- Kryo 265 = derivado de Cortex-A73/A53 (ARMv8.0-A). Tablas de SoC y casos públicos de SIGILL
+  por LSE en A53/A73 confirman el mecanismo.
+- **No verificado en binario**: el desensamblado del `libmain.so` del APK oficial no se completó
+  (la máquina local se queda sin recursos con 129 MB). La contraprueba práctica es el gate de CI
+  (§5) sobre el `.so` que compilamos nosotros.
+
+---
+
+## 4. Cambios realizados en esta sesión
+
+| Commit | Archivo | Qué |
+|---|---|---|
+| `47d1279` | `runtime/cmake/PublicProducts.cmake` | Android pasa a `-march=armv8-a` (baseline del ABI). **Éste es el fix del SIGILL.** |
+| `999ede6` | `.github/workflows/build-android.yml` | `FETCHCONTENT_SOURCE_DIR_MKW_MBEDTLS_UPSTREAM` (el nombre real del declare); Gradle 8.7 pinneado (el runner trae 9.x y AGP 8.5.2 no lo soporta); timeout 120→300 min; gate anti-LSE sobre `libmain.so`; SHA-256 del APK en el summary |
+| `e7ae859` | `aurora-main/cmake/AuroraDawnProvider.cmake` | El paquete Dawn exporta `…/sysroot/…/aarch64-linux-android/28/liblog.so` como **ruta absoluta del NDK del que lo compiló**. Se reescribe a `log` para que el toolchain la re-ubique. Sin esto, Ninja muere con *"no known rule to make it"* sin compilar nada |
+| `2c55f79` | `.github/workflows/build-android.yml` | La ruta del NDK se deriva de `NDK_VERSION` en cada paso (configure/stage/gate) y el chequeo de versión **falla duro**. Antes, un `ANDROID_NDK_HOME` heredado hacía que el configure usara **NDK 27** con el NDK 29 instalado |
+
+---
+
+## 5. Cronología del CI (mapa para no repetir pasos)
+
+| Run | Resultado | Causa |
+|---|---|---|
+| `39889930964` | falla en *Configure* | `mkw_mbedtls` referenciaba `MbedTLS::mbedtls`; el declare se llama `mkw_mbedtls_upstream` → el `FETCHCONTENT_SOURCE_DIR_MBEDTLS` genérico no lo alcanzaba |
+| `39890657223` | *Configure* OK, falla *Build* | (a) Ninja pedía un `liblog.so` en ruta **de Linux** del NDK del que se compiló Dawn; (b) el configure había usado **NDK 27.3.13750724** pese a tener el 29 instalado y exportado |
+| `39891535024` | **en curso** | con Dawn saneado y NDK 29 pinneado |
+
+Lecciones de los runs previos a esta sesión (no repetir): `setup-android@v3` no acepta
+`ndk;r29c`; no crear symlinks de sysroot; no hardcodear linker flags por API; no usar
+`Expand-Archive` con `.tar.gz`.
+
+---
+
+## 6. Flujo real de compilación (para no adivinar)
+
+1. **Translator (.NET 8)**: `main.dol` + `nsmbw_linked.rel` → `generated/functions`,
+   `generated/build_shards/shards.cmake` (≈39.400 funciones).
+2. **CMake + Ninja + NDK 29**: `runtime/` + `aurora-main/` + dependencias fijadas
+   (`Launcher/artifacts/dependencies`, `FETCHCONTENT_FULLY_DISCONNECTED=ON`) →
+   **`libmain.so`** (una sola biblioteca; libc++ estática, `ANDROID_PLATFORM=android-30`).
+3. **Stage**: `llvm-strip` → `android/native/jniLibs/arm64-v8a/`; `dsp_coef.bin`, `cacert.pem`,
+   `initial_pipeline_cache.db`, `wii_bootstrap/` → `android/native/assets/runtime/`.
+4. **Gradle** `assembleRelease` (firmado con la clave debug, instalable directo).
+
+El APK **no contiene datos del juego**: se importan en el teléfono con
+*"Import from Extracted Game Data Folder…"* o *"Import Game Data Zip…"* (ya existe en
+`LauncherActivity.java`).
+
+---
+
+## 7. Pendientes
+
+1. **Build en curso** `39891535024`: confirmar que pasa el gate anti-LSE y que Gradle produce el APK.
+   Si el build nativo muere por memoria/tiempo, ajustar `--parallel` (hoy 10) o los timeouts —
+   **no** tocar los flags de arquitectura.
+2. **Riesgo abierto — datos del juego**: `game/main.dol` tiene SHA256 `166eb6b7…`, **distinto** del
+   dump limpio SMNE01 rev 1 que espera el repo (`6d755ec2…`). El fork además relajó ese chequeo en
+   `unpack_game.py`. Se compila y traduce igual, pero si el`.dol` viene de una ISO modificada puede
+   haber diferencias de comportamiento. No se descargó ni se borró nada: decidir con el usuario.
+3. **Prueba en el Redmi** (nada de esto vale sin esto): conectar por ADB, `adb install -r`,
+   importar datos, verificar que no hay `SIGILL` al leer `Config.toml` y que el juego arranca.
+   Registrar SHA-256 del APK que funcione.
+4. **Limpieza**: borrar runs fallidos viejos **después** de guardar logs; `PHOENIX_HANDOFF.md`
+   y `phoenix-work/` local son los únicos artefactos de esta sesión.
+
+---
+
+## 8. Rollback
+
+- Fix de arquitectura: `git revert 47d1279` (vuelve a ARMv8.2-A; solo tiene sentido si el
+  dispositivo objetivo cambia a Cortex-A55/A75 o superior).
+- CI: `git revert <commit del workflow>`; el build vuelve al estado anterior sin tocar código.
+- Nada de esto toca `game/`, los APK originales ni configuración del sistema.
+
+---
+
+## 9. Diagnóstico de pantalla negra en Redmi Note 11 (`spes`)
+
+### Síntoma
+La APK se abre, muestra el menú, pero al darle al botón "play" para iniciar la partida queda en pantalla negra. El audio del juego suena (se reproduce continuamente), lo que indica que el proceso del juego está vivo pero no renderiza nada.
+
+### Causa 1 — MIUI SwipeUpClean mata el proceso `:game` (CONFIRMADA y CORREGIDA)
+
+`GameActivity` usaba `android:process=":game"` (proceso aislado). MIUI's SwipeUpClean detecta este proceso como background (adj=200) aunque `GameActivity` sea visible, y lo mata con `SIGKILL`. Esto crea un loop kill→restart→kill que el usuario percibe como pantalla negra.
+
+**Evidencia en logcat:**
 ```
-game/
-  main.dol              (3,019,336 bytes, SHA256 verificado)
-  nsmbw_linked.rel      (4,349,568 bytes, prelinked)
-  d_basesNP.rel
-  d_en_bossNP.rel
-  d_enemiesNP.rel
-  d_profileNP.rel
-  nsmbw_rel_layout.json
-```
-
-### Workflow actual: `.github/workflows/build-android.yml`
-- Usa **scripts originales adaptados para CI** (paths `GITHUB_WORKSPACE`, `ANDROID_NDK_HOME`)
-- **ARMv8-A baseline** preservado en configure step (`-DCMAKE_C_FLAGS=-march=armv8-a`, `-DCMAKE_CXX_FLAGS=-march=armv8-a`)
-- Dependencias Android: SDL, abseil, MbedTLS 3.6.7, **dawn_prebuilt_android (aarch64)**, fmt, freetype, imgui, libusb, libpng, sqlite3, tracy, xxhash, zlib, zstd
-- **Salta dependencias Windows-only**: `dawn_prebuilt` (Windows), `cppwinrt-tool` (UWP)
-- `FETCHCONTENT_FULLY_DISCONNECTED=ON` con fuentes fijadas
-
----
-
-## 4. Workflow a usar vs. no usar
-
-| Workflow | Estado | Acción |
-|----------|--------|--------|
-| `.github/workflows/build-android.yml` (actual) | **ACTIVO** — usa scripts originales | **Mantener y corregir** |
-| `.github/workflows/build.yml` (upstream) | Solo translator/test/macOS | Referencia, no compila Android |
-| `.github/workflows/package.yml` (upstream) | Installers Linux/Win/macOS | Referencia |
-| Scripts `*-ci.ps1` eliminados | Eliminados en commit 611a1cf | **No recrear** |
-
----
-
-## 5. Último error de CI (Run ID: 39885732936)
-
-**Fallo:** `Install Android SDK/NDK (pinned NDK 29)`  
-**Causa:** `android-actions/setup-android@v3` no reconoce `ndk;r29c` como identificador válido.
-
-```
-Warning: Failed to find package 'ndk;r29c'
-Error: The process 'C:\Android\android-sdk\cmdline-tools\16.0\bin\sdkmanager.bat' failed with exit code 1
-```
-
-**Evidencia:** El runner instala NDK 27.3.13750724 (r27d) en lugar de 29.0.14206865 (r29c). El Dawn prebuilt `dawn-android-aarch64` v20260603.191052 **requiere NDK 29** (toolchain con el que fue compilado).
-
-**Runs fallidos recientes:**
-- 39885732936 — NDK pin `ndk;r29c` inválido
-- 39885029195 — NDK 27 instalado en lugar de 29 (pin `ndk;29.0.14206865` ignorado)
-- 39883603058 — liblog.so API 28 vs 30 (symlink workaround fallido)
-- 39879170320 — mismo error liblog.so
-
----
-
-## 6. Acciones realizadas y errores a NO repetir
-
-### ✅ Hecho (conservar)
-- Flags `-march=armv8-a` en `configure-android.ps1` original
-- `recomp.yml` con paths correctos y SHA256 verificado
-- Game data en `game/` (main.dol + nsmbw_linked.rel + RELs)
-- Workflow usando scripts originales (no `*-ci.ps1`)
-- Dependencias Android-only inline en workflow (sin `Prepare-Dependencies-ci.ps1`)
-
-### ❌ Errores a NO repetir
-- **No usar `ndk;r29c` ni `ndk;29.0.14206865`** en `setup-android@v3` — no funcionan
-- **No crear symlinks artificiales** `/usr/local/lib/android/.../28 → 30` — el runner es Windows, paths son `C:\Android\...`
-- **No añadir linker flags hardcodeados** (`-DCMAKE_SHARED_LINKER_FLAGS=.../28/...`) — parche frágil
-- **No llamar `Prepare-Dependencies.ps1` completo en CI** — baja `dawn_prebuilt` (Windows) y `cppwinrt-tool` innecesarios
-- **No asumir que `ANDROID_NDK_HOME` apunta al NDK correcto** — verificar versión real
-
----
-
-## 7. Próximo paso concreto
-
-### Problema a resolver: **Instalar NDK 29.0.14206865 (r29c) en Windows runner**
-
-**Opciones investigadas:**
-1. **Instalar manualmente** con `sdkmanager "ndk;29.0.14206865"` en step `shell: cmd` o `pwsh` **antes** de `setup-android`
-2. **Descargar NDK 29 ZIP** desde `dl.google.com` y extraer a `C:\Android\android-sdk\ndk\29.0.14206865`
-3. **Usar `android-actions/setup-android@v3` solo para SDK/platforms** y gestionar NDK aparte
-
-**Archivos a modificar:**
-- `.github/workflows/build-android.yml` — step "Install Android SDK/NDK"
-
-**Comando de verificación NDK 29:**
-```powershell
-$ndk = "C:\Android\android-sdk\ndk\29.0.14206865"
-Test-Path "$ndk\build\cmake\android.toolchain.cmake"
-Get-Content "$ndk\source.properties" | Select-String "29\.0\.14206865"
-```
-
----
-
-## 8. Criterios de aceptación (Definition of Done)
-
-| Criterio | Verificación |
-|----------|--------------|
-| **CI compila sin errores** | Workflow `build-android.yml` pasa (verde) |
-| **NDK 29 usado** | Log muestra `Pkg.Revision = 29.0.14206865` |
-| **ARMv8-A baseline aplicado** | `CMAKE_C_FLAGS` y `CMAKE_CXX_FLAGS` contienen `-march=armv8-a` en configure log |
-| **libmain.so generado** | `android-build/libmain.so` existe, ~15-25 MB |
-| **APK generado** | `android/app/build/outputs/apk/release/app-release.apk` existe |
-| **APK arm64-v8a** | `unzip -l app-release.apk | grep libmain.so` → `lib/arm64-v8a/libmain.so` |
-| **SHA-256 del APK registrado** | `sha256sum app-release.apk` en logs/artifact |
-| **Sin SIGILL en spes** | **Prueba real en dispositivo** (fase final) |
-
----
-
-## 9. Reglas de trabajo obligatorias
-
-1. **Auditoría previa**: `git status`, `git log`, leer workflow y scripts antes de tocar nada
-2. **Cambios mínimos**: Un fix por commit, un commit por PR/push
-3. **Pruebas verificables**: Cada cambio → push → watch CI → analizar logs → decidir siguiente paso
-4. **Rollback inmediato**: Si un cambio rompe algo que funcionaba, `git revert` al commit anterior
-5. **Preservar estado**: No borrar logs de runs fallidos hasta extraer evidencia; no borrar artifacts válidos
-6. **Limpieza controlada**: `gh run delete` solo runs fallidos **después** de guardar logs relevantes
-7. **No especular**: Un cambio por hipótesis verificada; no 쌓ar parches "por si acaso"
-8. **Datos del juego intocables**: `game/` no se modifica, no se borra, no se regenera en CI
-
----
-
-## 10. Instrucciones de inicio para nuevo chat
-
-> **COPIA ESTE BLOQUE AL INICIAR EL NUEVO CHAT:**
->
-> ```
-> Contexto: Proyecto PHOENIX — NSMB Wii Multiplayer Recompilation APK para Redmi Note 11 `spes` (Snapdragon 680 / Kryo 265 / Adreno 610).
->
-> Repositorio: https://github.com/Axewwnd/NSMB-Wii-Multiplayer-Recompilation (fork de WitherBlitz/NSMB-Wii-Multiplayer-Recompilation)
->
-> Estado actual:
-> - Rama `main` en commit 23713a8 "ci: fix NDK version pin and Android dependencies"
-> - Workflow `.github/workflows/build-android.yml` usa scripts originales (`configure-android.ps1`, `build-android.ps1`, `stage-android.ps1`) adaptados para CI
-> - ARMv8-A baseline (`-march=armv8-a`) ya en configure script original
-> - Game data en `game/` (main.dol SHA256 verificado, nsmbw_linked.rel prelinked)
-> - **Último fallo CI (run 39885732936)**: `setup-android@v3` no acepta `ndk;r29c` — instala NDK 27 en lugar de 29
-> - Dawn prebuilt Android requiere NDK 29 (toolchain coincidente)
->
-> Próxima acción: Corregir instalación de NDK 29.0.14206865 en Windows runner (instalación manual vía sdkmanager o descarga ZIP) y re-ejecutar workflow.
->
-> Documento de referencia: `PHOENIX_HANDOFF.md` en raíz del repo.
-> ```
->
-> **No repitas la auditoría completa.** Verifica `git log --oneline -5`, lee el workflow actual, y continúa desde el fix de NDK 29.
-
----
-
-## 11. Limpieza de runs fallidos (pendiente)
-
-Cuando el build pase, ejecutar:
-```bash
-# Conservar logs de runs fallidos relevantes primero
-gh run view 39885732936 -R Axewwnd/NSMB-Wii-Multiplayer-Recompilation --log > /tmp/run-39885732936.log
-gh run view 39885029195 -R Axewwnd/NSMB-Wii-Multiplayer-Recompilation --log > /tmp/run-39885029195.log
-
-# Luego borrar runs fallidos antiguos (mantener últimos 2-3 para comparación)
-gh run delete 39883603058 39879170320 39878417375 39877971492 -R Axewwnd/NSMB-Wii-Multiplayer-Recompilation
+ProcessSceneCleaner: SwipeUpClean: kill procName=com.wither.nsmbw:game info=AS:2002
+ActivityManager: Killing 22444:com.wither.nsmbw:game/u0a581 (adj 200): SwipeUpClean
 ```
 
+**Fix:** Commit `c596ec3` — se eliminó `android:process=":game"` de `android/app/src/main/AndroidManifest.xml`. El juego ahora corre en el proceso principal (`com.wither.nsmbw`) donde SwipeUpClean no lo mata.
+
+### Causa 2 — Dawn no puede crear AHardwareBuffer con depth buffer en Adreno 610 (CONFIRMADA, PENDIENTE DE FIX)
+
+Después de fix #1, el proceso vive pero hay pantalla negra. El logcat muestra:
+
+```
+E AdrenoUtils: <adreno_init_memory_layout:4723>: Memory Layout input parameter validation failed!
+E qdgralloc: GetGpuResourceSizeAndDimensions Graphics metadata init failed
+E GraphicBufferAllocator: Failed to allocate (4 x 4) layerCount 1 format 56 usage b00: 1
+E GraphicBufferAllocator: Failed to allocate (4 x 4) layerCount 1 format 59 usage b00: 1
+E AHardwareBuffer: GraphicBuffer(w=4, h=4, lc=1) failed (Unknown error -1)
+```
+
+El formato 56 = `D16_UNORM`, formato 59 = `D32_FLOAT` (depth buffers). Dawn/Aurora está hardcodeado con `depthFormat = Depth32Float` en `aurora-main/lib/webgpu/gpu.cpp:977`. El controlador Adreno 610 de Xiaomi no soporta crear `AHardwareBuffer` con estos formatos de depth, por lo que Dawn falla al inicializar el renderizado y no se dibuja nada en pantalla.
+
+**Evidencia:** El proceso del juego (PID 24969) estuvo vivo 59+ segundos con audio reproduciéndose, pero sin mensajes de renderizado de Dawn después de los fallos de `qdgralloc`.
+
+**Fix propuesto (pendiente):** Modificar `aurora-main/lib/webgpu/gpu.cpp:977` para cambiar `wgpu::TextureFormat::Depth32Float` por un formato más compatible (ej. `Depth24Plus` o `Depth16`). Requiere recompilación y prueba en el dispositivo.
+
+**Logs de diagnóstico:** `/home/kett/phoenix-diagnostics/blackscreen-postfix-20261023-125858/logcat.txt` (captura completa del fallo con el fix del manifest aplicado).
+
 ---
 
-## 12. Verificación final en dispositivo (fase posterior a CI exitoso)
+## 10. Criterios de aceptación
 
-1. Descargar artifact APK del run exitoso
-2. `adb install -r app-release.apk` en Redmi Note 11
-3. Abrir app → "Import from Extracted Game Data Folder" → seleccionar carpeta con `main.dol` + RELs extraídos en el teléfono
-4. Verificar: **sin crash al parsear Config.toml**, juego inicia, 60 fps estables
-5. Registrar SHA-256 del APK funcional
-
----
-
-**Fin del documento PHOENIX_HANDOFF.md**  
-*Generado automáticamente desde estado real del repositorio 2026-10-23*
+| Criterio | Cómo se verifica |
+|---|---|
+| Compila sin errores | workflow `build-android.yml` en verde |
+| NDK 29 real | paso *Verify NDK version* (ahora falla duro si no) |
+| Baseline ARMv8-A | paso *Verify ARMv8-A baseline*: 0 instrucciones LSE/RCpc en `libmain.so` |
+| APK arm64 | `lib/arm64-v8a/libmain.so` dentro del APK, SHA-256 en el run summary |
+| Sin `SIGILL` en `spes` | APK instalado y lanzado en Redmi — menú abre, juego inicia sin crash |
+| Sin pantalla negra en `spes` | Al darle "play" desde el menú, el juego muestra una escena jugable (pendiente de fix #2) |
