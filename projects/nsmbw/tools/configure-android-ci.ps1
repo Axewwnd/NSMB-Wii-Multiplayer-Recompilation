@@ -57,6 +57,9 @@ $configure = @(
     # Avoids SIGILL from CRC32/AES/LSE/Atomics instructions not present on older ARMv8 cores
     '-DCMAKE_C_FLAGS=-march=armv8-a',
     '-DCMAKE_CXX_FLAGS=-march=armv8-a',
+    # Force linker to use API 30 libraries (fixes liblog.so API 28 vs 30 mismatch on Linux CI runner)
+    '-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--sysroot=/usr/local/lib/android/sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/sysroot -L/usr/local/lib/android/sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/30',
+    '-DCMAKE_EXE_LINKER_FLAGS=-Wl,--sysroot=/usr/local/lib/android/sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/sysroot -L/usr/local/lib/android/sdk/ndk/29.0.14206865/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/30',
     "-DMKW_TRANSLATED_COMPILE_JOBS=$TranslatedJobs"
 )
 
