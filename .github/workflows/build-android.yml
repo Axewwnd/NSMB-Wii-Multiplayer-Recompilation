@@ -21,6 +21,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 120
     env:
+      # Pinned NDK version - the Dawn prebuilt was built with this toolchain
       NDK_VERSION: '29.0.14206865'
     steps:
       - name: Checkout
@@ -49,7 +50,6 @@ jobs:
       - name: Run Translator (generate build shards)
         shell: pwsh
         run: |
-          # Use GITHUB_WORKSPACE for reliable repo root path
           $ws = $env:GITHUB_WORKSPACE
           if (-not $ws) { $ws = $PSScriptRoot; for ($i=0;$i-lt 3;$i++) { $ws = Split-Path $ws } }
           $translator = Join-Path $ws 'translator/src/Translator.Cli/bin/Release/net8.0/Translator.Cli.dll'
@@ -57,7 +57,6 @@ jobs:
           $logs = Join-Path $ws 'build-nsmbw/logs'
           New-Item -ItemType Directory -Force -Path $logs | Out-Null
 
-          # Verify translator exists
           if (-not (Test-Path $translator)) {
               Write-Error "Translator not found at $translator"
               Get-ChildItem (Join-Path $ws 'translator/src/Translator.Cli/bin/Release/net8.0/') -Recurse -ErrorAction SilentlyContinue | Select-Object FullName
@@ -97,6 +96,21 @@ jobs:
           packages: 'platforms;android-34 platforms;android-28 platforms;android-30 build-tools;34.0.0 ndk;29.0.14206865'
           accept-android-sdk-licenses: 'true'
 
+      - name: Verify NDK version
+        shell: pwsh
+        run: |
+          $ndkPath = $env:ANDROID_NDK_HOME
+          if (-not $ndkPath) { throw "ANDROID_NDK_HOME not set" }
+          Write-Host "NDK path: $ndkPath"
+          $versionFile = Join-Path $ndkPath 'source.properties'
+          if (Test-Path $versionFile) {
+              $content = Get-Content $versionFile
+              Write-Host "NDK version file: $content"
+              if ($content -notmatch "29\.0\.14206865") {
+                  Write-Warning "NDK version mismatch! Expected 29.0.14206865"
+              }
+          }
+
       - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
@@ -116,9 +130,45 @@ jobs:
         shell: pwsh
         run: ./Launcher/Prepare-PortableTools.ps1
 
-      - name: Prepare Dependencies (Dawn prebuilt, etc.)
+      - name: Prepare Dependencies (Dawn prebuilt for Android, etc.)
         shell: pwsh
-        run: ./Launcher/Prepare-Dependencies-ci.ps1
+        run: |
+          # Use original Prepare-Dependencies.ps1 but skip Windows-only deps
+          # and add dawn_prebuilt_android manually
+          ./Launcher/Prepare-Dependencies.ps1
+          # Download dawn_prebuilt_android (pinned v20260603.191052 for aarch64)
+          $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+          $dest = Join-Path $repoRoot 'Launcher\artifacts\dependencies'
+          $downloads = Join-Path $PSScriptRoot 'artifacts\downloads'
+          $dawnPkg = @{
+              Name = 'dawn_prebuilt_android'
+              File = 'dawn-v20260603.191052-android-aarch64.tar.gz'
+              Uris = @('https://github.com/theofficialgman/dawn-build/releases/download/v20260603.191052/dawn-android-aarch64.tar.gz')
+              Sha256 = '0e63e8cbf53551f703f582d1306f4257c0380353f66b53369d96952ce6d9f934'
+              Root = $null
+          }
+          $archive = Join-Path $downloads $dawnPkg.File
+          if (-not (Test-Path -LiteralPath $archive -PathType Leaf) -or
+              (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $dawnPkg.Sha256) {
+              Write-Host "Downloading $($dawnPkg.Name)..."
+              $temporary = $archive + '.partial'
+              Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+              Invoke-WebRequest -UseBasicParsing -Uri $dawnPkg.Uris[0] -OutFile $temporary
+              $actual = (Get-FileHash -LiteralPath $temporary -Algorithm SHA256).Hash.ToLowerInvariant()
+              if ($actual -ne $dawnPkg.Sha256) { throw "$($dawnPkg.Name) hash mismatch: $actual" }
+              Move-Item -LiteralPath $temporary -Destination $archive -Force
+          }
+          $target = Join-Path $dest $dawnPkg.Name
+          if (-not (Test-Path -LiteralPath $target -PathType Container)) {
+              $extract = Join-Path $dest ('.extract-' + $dawnPkg.Name)
+              if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
+              Expand-Archive -LiteralPath $archive -DestinationPath $extract
+              $source = $extract
+              if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "$($dawnPkg.Name) archive layout changed." }
+              Move-Item -LiteralPath $source -Destination $target
+              if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
+          }
+          Write-Host "Prepared dawn_prebuilt_android"
 
       - name: Verify Game Data Exists
         shell: pwsh
@@ -141,12 +191,11 @@ jobs:
       - name: Unpack & Prelink RELs (if game folder is raw extraction)
         shell: pwsh
         run: |
-          # If game/main.dol exists but nsmbw_linked.rel doesn't, run prelink
           if (-not (Test-Path "game/nsmbw_linked.rel")) {
             python projects/nsmbw/tools/prelink_rels.py
           }
 
-      - name: Configure Android Build
+      - name: Configure Android Build (original script adapted for CI)
         shell: pwsh
         run: |
           $workspace = $env:GITHUB_WORKSPACE
@@ -169,8 +218,6 @@ jobs:
           # Keep the Windows compilers out of reach: only the NDK's clang may be found.
           $env:PATH = "$toolchain\CMake\bin;$toolchain\Ninja;$env:SystemRoot\System32;$env:SystemRoot"
 
-          function ConvertTo-CMakePath([string]$Path) { [IO.Path]::GetFullPath($Path).Replace('\', '/') }
-
           $configure = @(
               '-S', (ConvertTo-CMakePath (Join-Path $workspaceRoot 'runtime')),
               '-B', (ConvertTo-CMakePath $buildDir),
@@ -180,8 +227,6 @@ jobs:
               '-DANDROID_ABI=arm64-v8a',
               # memfd_create (guest RAM) is in bionic from API 30.
               '-DANDROID_PLATFORM=android-30',
-              '-DANDROID_NATIVE_API_LEVEL=30',
-              '-DCMAKE_SYSTEM_VERSION=30',
               # One native library holds everything (SDL, Dawn, the game), so libc++ is linked in statically.
               '-DANDROID_STL=c++_static',
               '-DCMAKE_BUILD_TYPE=Release',
@@ -202,7 +247,6 @@ jobs:
 
           # Windows PowerShell 5.1 turns a native program's stderr lines into error records; CMake prints
           # ordinary status there, so run it with 'Continue' and keep the log as plain text.
-          # Also output to stdout so CI logs show the error.
           $ErrorActionPreference = 'Continue'
           & (Join-Path $toolchain 'CMake\bin\cmake.exe') @configure 2>&1 |
               ForEach-Object { "$_" } | Tee-Object -FilePath $logPath -Encoding utf8
