@@ -100,7 +100,11 @@ jobs:
       - name: Fix NDK sysroot API 28 -> 30 symlink (CI runner)
         # The CI runner (windows-latest) uses Linux-style NDK paths. Create symlink from API 30 to API 28.
         run: |
-          NDK_PATH="/usr/local/lib/android/sdk/ndk/29.0.14206865"
+          NDK_PATH="${ANDROID_NDK_HOME}"
+          if [ -z "${NDK_PATH}" ]; then
+            echo "ANDROID_NDK_HOME not set, trying default path"
+            NDK_PATH="/usr/local/lib/android/sdk/ndk/29.0.14206865"
+          fi
           SYSROOT="${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android"
           if [ -d "${SYSROOT}/30" ] && [ ! -e "${SYSROOT}/28" ]; then
             echo "Creating symlink from API 30 to API 28 in NDK sysroot"
