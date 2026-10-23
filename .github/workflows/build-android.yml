@@ -19,7 +19,8 @@ jobs:
   build-android:
     name: Android arm64-v8a (NDK 29)
     runs-on: windows-latest
-    timeout-minutes: 120
+    # ~39k translated functions plus the runtime and the vendored libraries on four cores.
+    timeout-minutes: 300
     env:
       # Pinned NDK version - the Dawn prebuilt was built with this toolchain
       NDK_VERSION: '29.0.14206865'
@@ -463,6 +464,14 @@ jobs:
               $configure += "-DFETCHCONTENT_SOURCE_DIR_$($directory.Name.ToUpperInvariant())=$(ConvertTo-CMakePath $directory.FullName)"
           }
           $configure += "-DFETCHCONTENT_SOURCE_DIR_DAWN_PREBUILT=$(ConvertTo-CMakePath (Join-Path $dependencies 'dawn_prebuilt_android'))"
+          # runtime/CMakeLists.txt declares mbedtls as "mkw_mbedtls_upstream", so the generic
+          # FETCHCONTENT_SOURCE_DIR_<DIR> loop above cannot reach it; without this the interface
+          # target ends up naming MbedTLS::mbedtls, which nothing defines.
+          if (Test-Path -LiteralPath (Join-Path $dependencies 'mbedtls\CMakeLists.txt')) {
+              $configure += "-DFETCHCONTENT_SOURCE_DIR_MKW_MBEDTLS_UPSTREAM=$(ConvertTo-CMakePath (Join-Path $dependencies 'mbedtls'))"
+          } else {
+              throw "Dependencies\mbedtls\CMakeLists.txt is missing (pinned mbedtls 3.6.7 source tree)"
+          }
 
           # Windows PowerShell 5.1 turns a native program's stderr lines into error records; CMake prints
           # ordinary status there, so run it with 'Continue' and keep the log as plain text.
@@ -530,8 +539,45 @@ jobs:
           Get-ChildItem $assets -Recurse -File | Measure-Object Length -Sum |
               ForEach-Object { '{0} runtime files, {1:N1} MB' -f $_.Count, ($_.Sum / 1MB) }
 
+      - name: Verify ARMv8-A baseline in libmain.so
+        shell: pwsh
+        run: |
+          $ndk = $env:ANDROID_NDK_HOME
+          $objdump = Join-Path $ndk 'toolchains\llvm\prebuilt\windows-x86_64\bin\llvm-objdump.exe'
+          $lib = Join-Path $env:GITHUB_WORKSPACE 'android\native\jniLibs\arm64-v8a\libmain.so'
+          if (-not (Test-Path -LiteralPath $objdump)) { throw "llvm-objdump is missing: $objdump" }
+          if (-not (Test-Path -LiteralPath $lib)) { throw "libmain.so is missing: $lib" }
+          # Kryo 265 (Cortex-A73/A53, Snapdragon 680) implements neither the ARMv8.1 LSE atomics
+          # nor the ARMv8.2 RCpc loads: one of these in libmain.so is a guaranteed SIGILL there.
+          $pattern = '^\s*[0-9a-f]+:\s+(cas|ldadd|ldclr|ldeor|ldset|ldsmax|ldsmin|ldumax|ldumin|swp|ldapr)[abhl]*(\s|$)'
+          $hits = @(& $objdump -d --no-show-raw-insn $lib | Select-String -Pattern $pattern)
+          if ($hits.Count -gt 0) {
+              $hits | Select-Object -First 10 | ForEach-Object { Write-Host $_.Line.Trim() }
+              throw "libmain.so holds $($hits.Count) ARMv8.1+/ARMv8.2 instruction(s) that SIGILL on Kryo 265"
+          }
+          Write-Host 'OK: libmain.so stays on the ARMv8-A baseline (no LSE atomics, no RCpc loads)'
+
+      - name: Setup Gradle 8.7 (AGP 8.5.2)
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          # The runner ships Gradle 9.x, which AGP 8.5.2 does not support.
+          gradle-version: '8.7'
+
       - name: Build APK (Gradle)
         run: gradle -p android assembleRelease
+
+      - name: Report APK checksum
+        shell: pwsh
+        run: |
+          $apk = Join-Path $env:GITHUB_WORKSPACE 'android\app\build\outputs\apk\release\app-release.apk'
+          if (-not (Test-Path -LiteralPath $apk)) { throw "APK is missing: $apk" }
+          $file = Get-Item -LiteralPath $apk
+          $hash = (Get-FileHash -LiteralPath $apk -Algorithm SHA256).Hash.ToLowerInvariant()
+          $info = '{0:N1} MB  {1}' -f ($file.Length / 1MB), $apk
+          Write-Host $info
+          Write-Host "APK SHA-256: $hash"
+          $info | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+          "APK SHA-256: $hash" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v7
