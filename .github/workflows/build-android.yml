@@ -154,17 +154,18 @@ jobs:
       - name: Verify NDK version
         shell: pwsh
         run: |
-          $ndkPath = $env:ANDROID_NDK_HOME
-          if (-not $ndkPath) { throw "ANDROID_NDK_HOME not set" }
+          # Derive the path from the pin instead of trusting ANDROID_NDK_HOME: the runner image
+          # ships its own NDK and an inherited value silently pointed the configure step at NDK 27.
+          $ndkPath = Join-Path 'C:\Android\android-sdk\ndk' $env:NDK_VERSION
           Write-Host "NDK path: $ndkPath"
           $versionFile = Join-Path $ndkPath 'source.properties'
-          if (Test-Path $versionFile) {
-              $content = Get-Content $versionFile
-              Write-Host "NDK version file: $content"
-              if ($content -notmatch "29\.0\.") {
-                  Write-Warning "NDK version mismatch! Expected 29.x"
-              }
+          if (-not (Test-Path -LiteralPath $versionFile)) { throw "NDK $($env:NDK_VERSION) is not installed: $versionFile" }
+          $content = Get-Content -LiteralPath $versionFile -Raw
+          Write-Host "NDK version file: $content"
+          if ($content -notmatch "Pkg\.Revision = $([regex]::Escape($env:NDK_VERSION))") {
+              throw "NDK version mismatch: expected $($env:NDK_VERSION) at $ndkPath"
           }
+          "ANDROID_NDK_HOME=$ndkPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Setup JDK 17
         uses: actions/setup-java@v4
@@ -420,7 +421,7 @@ jobs:
         run: |
           $workspace = $env:GITHUB_WORKSPACE
           $toolchain = Join-Path $workspace 'Launcher\artifacts\portable-tools'
-          $ndk = $env:ANDROID_NDK_HOME
+          $ndk = Join-Path 'C:\Android\android-sdk\ndk' $env:NDK_VERSION
           $dependencies = Join-Path $workspace 'Launcher\artifacts\dependencies'
           $workspaceRoot = $workspace
           $buildDir = Join-Path $workspace 'android-build'
@@ -503,7 +504,7 @@ jobs:
         shell: pwsh
         run: |
           $workspace = $env:GITHUB_WORKSPACE
-          $ndk = $env:ANDROID_NDK_HOME
+          $ndk = Join-Path 'C:\Android\android-sdk\ndk' $env:NDK_VERSION
           $strip = Join-Path $ndk 'toolchains\llvm\prebuilt\windows-x86_64\bin\llvm-strip.exe'
           $buildDir = Join-Path $workspace 'android-build'
           $nativeDir = Join-Path $workspace 'android\native'
@@ -542,7 +543,7 @@ jobs:
       - name: Verify ARMv8-A baseline in libmain.so
         shell: pwsh
         run: |
-          $ndk = $env:ANDROID_NDK_HOME
+          $ndk = Join-Path 'C:\Android\android-sdk\ndk' $env:NDK_VERSION
           $objdump = Join-Path $ndk 'toolchains\llvm\prebuilt\windows-x86_64\bin\llvm-objdump.exe'
           $lib = Join-Path $env:GITHUB_WORKSPACE 'android\native\jniLibs\arm64-v8a\libmain.so'
           if (-not (Test-Path -LiteralPath $objdump)) { throw "llvm-objdump is missing: $objdump" }
