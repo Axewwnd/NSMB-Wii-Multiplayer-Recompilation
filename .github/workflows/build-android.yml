@@ -90,10 +90,10 @@ jobs:
               Pop-Location
           }
 
-      - name: Install Android SDK/NDK
+      - name: Install Android SDK/NDK (pinned NDK 29)
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platforms;android-34 platforms;android-28 platforms;android-30 build-tools;34.0.0 ndk;29.0.14206865'
+          packages: 'platforms;android-34 platforms;android-28 platforms;android-30 build-tools;34.0.0 ndk;r29c'
           accept-android-sdk-licenses: 'true'
 
       - name: Verify NDK version
@@ -106,8 +106,8 @@ jobs:
           if (Test-Path $versionFile) {
               $content = Get-Content $versionFile
               Write-Host "NDK version file: $content"
-              if ($content -notmatch "29\.0\.14206865") {
-                  Write-Warning "NDK version mismatch! Expected 29.0.14206865"
+              if ($content -notmatch "29\.0\.") {
+                  Write-Warning "NDK version mismatch! Expected 29.x"
               }
           }
 
@@ -130,45 +130,184 @@ jobs:
         shell: pwsh
         run: ./Launcher/Prepare-PortableTools.ps1
 
-      - name: Prepare Dependencies (Dawn prebuilt for Android, etc.)
+      - name: Prepare Dependencies (Android only - skip Windows deps)
         shell: pwsh
         run: |
-          # Use original Prepare-Dependencies.ps1 but skip Windows-only deps
-          # and add dawn_prebuilt_android manually
-          ./Launcher/Prepare-Dependencies.ps1
-          # Download dawn_prebuilt_android (pinned v20260603.191052 for aarch64)
+          # Prepare Android dependencies: same as Prepare-Dependencies.ps1 but WITHOUT Windows-only packages
+          # Windows-only: dawn_prebuilt (Windows), cppwinrt-tool (Windows UWP)
+          # Android-specific: dawn_prebuilt_android (aarch64)
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version 3.0
+
           $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-          $dest = Join-Path $repoRoot 'Launcher\artifacts\dependencies'
+          $auroraCMake = Join-Path $repoRoot 'aurora-main\CMakeLists.txt'
+          $auroraExtern = Join-Path $repoRoot 'aurora-main\extern\CMakeLists.txt'
+          $auroraLibUsb = Join-Path $repoRoot 'aurora-main\cmake\AuroraLibUSB.cmake'
+          $auroraSdl = Join-Path $repoRoot 'aurora-main\cmake\AuroraSDL3Provider.cmake'
+          $auroraDawn = Join-Path $repoRoot 'aurora-main\cmake\AuroraDawnProvider.cmake'
+          $runtimeCMake = Join-Path $repoRoot 'runtime\CMakeLists.txt'
+
+          # Android CI packages: same pins as Prepare-Dependencies.ps1 but WITHOUT Windows-only deps
+          # INCLUDES dawn_prebuilt_android (pinned v20260603.191052 for aarch64)
+          $packages = @(
+              [pscustomobject]@{
+                  Name = 'SDL'; File = 'SDL3-3.4.4.tar.gz'
+                  Uris = @('https://github.com/libsdl-org/SDL/releases/download/release-3.4.4/SDL3-3.4.4.tar.gz')
+                  Pins = @(@{ File = $auroraCMake; Text = 'set(AURORA_SDL3_VERSION "3.4.4"' },
+                           @{ File = $auroraSdl; Text = 'releases/download/release-${AURORA_SDL3_VERSION}/SDL3-${AURORA_SDL3_VERSION}.tar.gz' })
+              },
+              [pscustomobject]@{
+                  Name = 'abseil-cpp'; File = 'abseil-cpp-20240722.0.tar.gz'
+                  Uris = @('https://github.com/abseil/abseil-cpp/archive/refs/tags/20240722.0.tar.gz')
+                  Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/abseil/abseil-cpp/archive/refs/tags/20240722.0.tar.gz' })
+              },
+              [pscustomobject]@{
+                  Name = 'mbedtls'; File = 'mbedtls-3.6.7.tar.bz2'
+                  Uris = @('https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2')
+                  Pins = @(@{ File = (Join-Path $repoRoot 'runtime\cmake\MbedTLSPin.cmake'); Text = '3.6.7' })
+              },
+              [pscustomobject]@{
+                  Name = 'dawn_prebuilt_android'; File = 'dawn-v20260603.191052-android-aarch64.tar.gz'
+                  Uris = @('https://github.com/theofficialgman/dawn-build/releases/download/v20260603.191052/dawn-android-aarch64.tar.gz')
+                  Sha256 = '0e63e8cbf53551f703f582d1306f4257c0380353f66b53369d96952ce6d9f934'
+                  Pins = @(@{ File = $auroraCMake; Text = 'set(AURORA_DAWN_VERSION "v20260603.191052"' },
+                           @{ File = $auroraDawn; Text = 'SHA256=0e63e8cbf53551f703f582d1306f4257c0380353f66b53369d96952ce6d9f934' })
+              },
+              [pscustomobject]@{
+                  Name = 'fmt'; File = 'fmt-11.1.4.tar.gz'
+                  Uris = @('https://github.com/fmtlib/fmt/archive/refs/tags/11.1.4.tar.gz')
+                  Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/fmtlib/fmt/archive/refs/tags/11.1.4.tar.gz' })
+              },
+              [pscustomobject]@{
+                  Name = 'freetype'; File = 'freetype-2.14.3.tar.gz'
+                  Uris = @('https://files.twilitrealm.dev/freetype-2.14.3.tar.gz',
+                           'https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.gz',
+                           'https://downloads.sourceforge.net/project/freetype/freetype2/2.14.3/freetype-2.14.3.tar.gz')
+                  Pins = @(@{ File = $auroraExtern; Text = 'https://files.twilitrealm.dev/freetype-2.14.3.tar.gz' })
+              },
+              [pscustomobject]@{
+                  Name = 'imgui'; File = 'imgui-1.91.9b-docking.tar.gz'
+                  Uris = @('https://github.com/ocornut/imgui/archive/refs/tags/v1.91.9b-docking.tar.gz')
+                  Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/ocornut/imgui/archive/refs/tags/v1.91.9b-docking.tar.gz' })
+              },
+              [pscustomobject]@{
+                  Name = 'libusb'; File = 'libusb-1.0.30.tar.bz2'
+                  Uris = @('https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.tar.bz2')
+                  Pins = @(@{ File = $auroraCMake; Text = 'set(AURORA_LIBUSB_VERSION "1.0.30"' },
+                           @{ File = $auroraLibUsb; Text = 'releases/download/v${AURORA_LIBUSB_VERSION}/libusb-${AURORA_LIBUSB_VERSION}.tar.bz2' })
+              },
+              [pscustomobject]@{
+                  Name = 'png'; File = 'libpng-1.6.58.tar.gz'
+                  Uris = @('https://github.com/pnggroup/libpng/archive/refs/tags/v1.6.58.tar.gz')
+                  Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/pnggroup/libpng/archive/refs/tags/v1.6.58.tar.gz' })
+              },
+              [pscustomobject]@{
+                  Name = 'sqlite3'; File = 'sqlite-amalgamation-3510300.zip'
+                  Uris = @('https://sqlite.org/2026/sqlite-amalgamation-3510300.zip')
+                  Pins = @(@{ File = $auroraExtern; Text = 'https://sqlite.org/2026/sqlite-amalgamation-3510300.zip' })
+              },
+              [pscustomobject]@{
+                  Name = 'tracy'; File = 'tracy-a64b9a20294d59421a2f57aeca3c6383d8c48169.tar.gz'
+                  Uris = @('https://github.com/wolfpld/tracy/archive/a64b9a20294d59421a2f57aeca3c6383d8c48169.tar.gz')
+                  Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/wolfpld/tracy/archive/a64b9a20294d59421a2f57aeca3c6383d8c48169.tar.gz' })
+              },
+              [pscustomobject]@{
+                  Name = 'xxhash'; File = 'xxHash-0.8.4.tar.gz'
+                  Uris = @('https://github.com/Cyan4973/xxHash/archive/refs/tags/v0.8.4.tar.gz')
+                  Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/Cyan4973/xxHash/archive/refs/tags/v0.8.4.tar.gz' })
+              },
+              [pscustomobject]@{
+                  Name = 'zlib'; File = 'zlib-1.3.2.tar.gz'
+                  Uris = @('https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz')
+                  Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz' })
+              },
+              [pscustomobject]@{
+                  Name = 'zstd'; File = 'zstd-1.5.7.tar.gz'
+                  Uris = @('https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz')
+                  Pins = @(@{ File = $auroraExtern; Text = 'https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz' })
+              }
+          )
+
+          $Destination = Join-Path $repoRoot 'Launcher\artifacts\dependencies'
           $downloads = Join-Path $PSScriptRoot 'artifacts\downloads'
-          $dawnPkg = @{
-              Name = 'dawn_prebuilt_android'
-              File = 'dawn-v20260603.191052-android-aarch64.tar.gz'
-              Uris = @('https://github.com/theofficialgman/dawn-build/releases/download/v20260603.191052/dawn-android-aarch64.tar.gz')
-              Sha256 = '0e63e8cbf53551f703f582d1306f4257c0380353f66b53369d96952ce6d9f934'
-              Root = $null
+          $tar = Join-Path $env:SystemRoot 'System32\tar.exe'
+          if (-not (Test-Path -LiteralPath $tar -PathType Leaf)) { throw "Windows archive tool is missing: $tar" }
+          [IO.Directory]::CreateDirectory($Destination) | Out-Null
+          [IO.Directory]::CreateDirectory($downloads) | Out-Null
+
+          function Assert-Pinned($Package) {
+              foreach ($pin in $Package.Pins) {
+                  if (-not (Test-Path -LiteralPath $pin.File -PathType Leaf)) { throw "Pin source is missing: $($pin.File)" }
+                  $content = [IO.File]::ReadAllText($pin.File)
+                  if (-not $content.Contains($pin.Text)) {
+                      throw "$($Package.Name) is pinned to '$($pin.Text)' here but $($pin.File) no longer declares it; update both."
+                  }
+              }
           }
-          $archive = Join-Path $downloads $dawnPkg.File
-          if (-not (Test-Path -LiteralPath $archive -PathType Leaf) -or
-              (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $dawnPkg.Sha256) {
-              Write-Host "Downloading $($dawnPkg.Name)..."
+
+          function Get-Archive($Package) {
+              $archive = Join-Path $downloads $Package.File
+              if (Test-Path -LiteralPath $archive -PathType Leaf) { return $archive }
               $temporary = $archive + '.partial'
+              $failures = @()
+              foreach ($uri in $Package.Uris) {
+                  Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
+                  Write-Host "Downloading $($Package.Name) from $uri..."
+                  try {
+                      Invoke-WebRequest -UseBasicParsing -Uri $uri -OutFile $temporary
+                  } catch {
+                      $failures += "$uri ($($_.Exception.Message))"
+                      continue
+                  }
+                  Move-Item -LiteralPath $temporary -Destination $archive -Force
+                  return $archive
+              }
               Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
-              Invoke-WebRequest -UseBasicParsing -Uri $dawnPkg.Uris[0] -OutFile $temporary
-              $actual = (Get-FileHash -LiteralPath $temporary -Algorithm SHA256).Hash.ToLowerInvariant()
-              if ($actual -ne $dawnPkg.Sha256) { throw "$($dawnPkg.Name) hash mismatch: $actual" }
-              Move-Item -LiteralPath $temporary -Destination $archive -Force
+              throw "$($Package.Name) could not be fetched: $($failures -join '; ')"
           }
-          $target = Join-Path $dest $dawnPkg.Name
-          if (-not (Test-Path -LiteralPath $target -PathType Container)) {
-              $extract = Join-Path $dest ('.extract-' + $dawnPkg.Name)
+
+          function Expand-Package([string]$Archive, [string]$Target) {
+              $extract = Join-Path (Split-Path -Parent $Target) ('.extract-' + (Split-Path -Leaf $Target))
               if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
-              Expand-Archive -LiteralPath $archive -DestinationPath $extract
+              [IO.Directory]::CreateDirectory($extract) | Out-Null
+              $listing = & $tar -tvf $Archive
+              if ($LASTEXITCODE -ne 0) { throw "Listing $Archive failed with exit code $LASTEXITCODE." }
+              $excludes = @($listing | ForEach-Object { if ($_ -match '^l.*\s(\S+)\s->\s') { '--exclude=' + $Matches[1] } })
+              & $tar -xf $Archive -C $extract @excludes
+              if ($LASTEXITCODE -ne 0) { throw "Extracting $Archive failed with exit code $LASTEXITCODE." }
+              $entries = @(Get-ChildItem -LiteralPath $extract -Force)
               $source = $extract
-              if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "$($dawnPkg.Name) archive layout changed." }
-              Move-Item -LiteralPath $source -Destination $target
+              if ($entries.Count -eq 1 -and $entries[0].PSIsContainer) { $source = $entries[0].FullName }
+              if (Test-Path -LiteralPath $Target) { Remove-Item -LiteralPath $Target -Recurse -Force }
+              Move-Item -LiteralPath $source -Destination $Target
               if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
           }
-          Write-Host "Prepared dawn_prebuilt_android"
+
+          foreach ($package in $packages) {
+              Assert-Pinned $package
+              $target = Join-Path $Destination $package.Name
+              if (Test-Path -LiteralPath $target -PathType Container) { continue }
+              # For dawn_prebuilt_android use SHA256 verification, for others use tar
+              if ($package.Name -eq 'dawn_prebuilt_android') {
+                  $archive = Get-Archive $package
+                  if (-not (Test-Path -LiteralPath $archive -PathType Leaf) -or
+                      (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $package.Sha256) {
+                      throw "$($package.Name) hash mismatch"
+                  }
+                  $extract = Join-Path $Destination ('.extract-' + $package.Name)
+                  if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
+                  Expand-Archive -LiteralPath $archive -DestinationPath $extract
+                  $source = $extract
+                  if (-not (Test-Path -LiteralPath $source -PathType Container)) { throw "$($package.Name) archive layout changed." }
+                  Move-Item -LiteralPath $source -Destination $target
+                  if (Test-Path -LiteralPath $extract) { Remove-Item -LiteralPath $extract -Recurse -Force }
+              } else {
+                  Expand-Package (Get-Archive $package) $target
+              }
+              Write-Host "Prepared $($package.Name)"
+          }
+
+          Write-Host "Pinned dependency sources ready (Android): $Destination"
 
       - name: Verify Game Data Exists
         shell: pwsh
