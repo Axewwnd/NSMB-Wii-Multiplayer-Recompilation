@@ -548,15 +548,43 @@ jobs:
           $lib = Join-Path $env:GITHUB_WORKSPACE 'android\native\jniLibs\arm64-v8a\libmain.so'
           if (-not (Test-Path -LiteralPath $objdump)) { throw "llvm-objdump is missing: $objdump" }
           if (-not (Test-Path -LiteralPath $lib)) { throw "libmain.so is missing: $lib" }
-          # Kryo 265 (Cortex-A73/A53, Snapdragon 680) implements neither the ARMv8.1 LSE atomics
-          # nor the ARMv8.2 RCpc loads: one of these in libmain.so is a guaranteed SIGILL there.
-          $pattern = '^\s*[0-9a-f]+:\s+(cas|ldadd|ldclr|ldeor|ldset|ldsmax|ldsmin|ldumax|ldumin|swp|ldapr)[abhl]*(\s|$)'
-          $hits = @(& $objdump -d --no-show-raw-insn $lib | Select-String -Pattern $pattern)
-          if ($hits.Count -gt 0) {
-              $hits | Select-Object -First 10 | ForEach-Object { Write-Host $_.Line.Trim() }
-              throw "libmain.so holds $($hits.Count) ARMv8.1+/ARMv8.2 instruction(s) that SIGILL on Kryo 265"
+
+          # 1. What we compiled, deterministically: no product or third-party target may ask for an
+          # ISA above ARMv8-A. The arch flag lives in PublicProducts.cmake and must reach every rule.
+          $ninja = Join-Path $env:GITHUB_WORKSPACE 'android-build\build.ninja'
+          if (-not (Test-Path -LiteralPath $ninja)) { throw "build.ninja is missing: $ninja" }
+          $badFlags = @(Select-String -LiteralPath $ninja -Pattern '-march=armv8\.[1-9]|-march=armv9|-mcpu=')
+          if ($badFlags.Count -gt 0) {
+              $badFlags | Select-Object -First 5 | ForEach-Object { Write-Host $_.Line.Trim() }
+              throw "build.ninja asks for an ISA above ARMv8-A ($($badFlags.Count) rule(s))"
           }
-          Write-Host 'OK: libmain.so stays on the ARMv8-A baseline (no LSE atomics, no RCpc loads)'
+          Write-Host 'OK: build.ninja compiles every rule for the ARMv8-A baseline'
+
+          # 2. What ended up in the binary. Kryo 265 (Cortex-A73/A53, Snapdragon 680) implements
+          # neither the ARMv8.1 LSE atomics nor the ARMv8.2 RCpc loads. The one legitimate place
+          # they appear is compiler-rt's -moutline-atomics helpers: they branch on
+          # __aarch64_have_lse_atomics (0 on these cores) before the LSE path, so the LL/SC path is
+          # what runs. Anything else is real codegen and a guaranteed SIGILL.
+          $pattern = '^\s*[0-9a-f]+:\s+(cas|ldadd|ldclr|ldeor|ldset|ldsmax|ldsmin|ldumax|ldumin|swp|ldapr)[abhl]*(\s|$)'
+          $hits = @(& $objdump -d --no-show-raw-insn $lib | Select-String -Pattern $pattern -Context 8,0)
+          $unguarded = @()
+          foreach ($hit in $hits) {
+              $window = ($hit.Context.PreContext -join "`n")
+              if ($window -notmatch '\b(cbz|cbnz|tbz|tbnz)\b') { $unguarded += $hit }
+          }
+          Write-Host "LSE/RCpc instructions: $($hits.Count) (runtime-guarded helper stubs: $($hits.Count - $unguarded.Count))"
+          if ($hits.Count -gt 0) {
+              $hits | Select-Object -First 25 | ForEach-Object { Write-Host "  $($_.Line.Trim())" }
+          }
+          if ($unguarded.Count -gt 0) {
+              Write-Host '--- unguarded, i.e. emitted straight into normal code paths: ---'
+              $unguarded | Select-Object -First 20 | ForEach-Object {
+                  Write-Host "  $($_.Line.Trim())"
+                  $_.Context.PreContext | ForEach-Object { Write-Host "    $_" }
+              }
+              throw "libmain.so holds $($unguarded.Count) unguarded ARMv8.1+/ARMv8.2 instruction(s) that SIGILL on Kryo 265"
+          }
+          Write-Host 'OK: libmain.so stays on the ARMv8-A baseline'
 
       - name: Setup Gradle 8.7 (AGP 8.5.2)
         uses: gradle/actions/setup-gradle@v4
