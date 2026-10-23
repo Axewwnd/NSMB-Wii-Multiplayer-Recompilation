@@ -591,6 +591,9 @@ jobs:
         with:
           # The runner ships Gradle 9.x, which AGP 8.5.2 does not support.
           gradle-version: '8.7'
+          # Our project runs `gradle` directly from PATH (no wrapper). The action
+          # scans the whole workspace and fails on the SDL dependency's wrapper.
+          validate-wrappers: false
 
       - name: Build APK (Gradle)
         run: gradle -p android assembleRelease
