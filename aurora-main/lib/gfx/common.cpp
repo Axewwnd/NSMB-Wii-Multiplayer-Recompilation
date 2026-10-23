@@ -787,24 +787,27 @@ static OffscreenCacheEntry get_offscreen_textures(uint32_t width, uint32_t heigh
       .size = size,
       .format = colorFormat,
   };
-  const auto depthFormat = webgpu::g_graphicsConfig.depthFormat;
-  const wgpu::TextureDescriptor depthDesc{
-      .label = "Offscreen Depth",
-      .usage = wgpu::TextureUsage::RenderAttachment,
-      .dimension = wgpu::TextureDimension::e2D,
-      .size = size,
-      .format = depthFormat,
-      .mipLevelCount = 1,
-      .sampleCount = 1,
-  };
-  auto depthTexture = g_device.CreateTexture(&depthDesc);
-  auto depthView = depthTexture.CreateView();
-  webgpu::TextureWithSampler depth{
-      .texture = std::move(depthTexture),
-      .view = std::move(depthView),
-      .size = size,
-      .format = depthFormat,
-  };
+  webgpu::TextureWithSampler depth{};
+  if (webgpu::g_graphicsConfig.depthFormat != wgpu::TextureFormat::Undefined) {
+    const auto depthFormat = webgpu::g_graphicsConfig.depthFormat;
+    const wgpu::TextureDescriptor depthDesc{
+        .label = "Offscreen Depth",
+        .usage = wgpu::TextureUsage::RenderAttachment,
+        .dimension = wgpu::TextureDimension::e2D,
+        .size = size,
+        .format = depthFormat,
+        .mipLevelCount = 1,
+        .sampleCount = 1,
+    };
+    auto depthTexture = g_device.CreateTexture(&depthDesc);
+    auto depthView = depthTexture.CreateView();
+    depth = webgpu::TextureWithSampler{
+        .texture = std::move(depthTexture),
+        .view = std::move(depthView),
+        .size = size,
+        .format = depthFormat,
+    };
+  }
   OffscreenCacheEntry entry{
       .color = std::move(color),
       .depth = std::move(depth),
@@ -1389,17 +1392,19 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
                 },
         },
     };
-    const wgpu::RenderPassDepthStencilAttachment depthStencilAttachment{
+    wgpu::RenderPassDepthStencilAttachment depthStencilAttachment{
         .view = passInfo.depthView,
         .depthLoadOp = passInfo.clearDepth ? wgpu::LoadOp::Clear : wgpu::LoadOp::Load,
         .depthStoreOp = wgpu::StoreOp::Store,
         .depthClearValue = passInfo.clearDepthValue,
     };
+    const wgpu::RenderPassDepthStencilAttachment* depthStencilAttachmentPtr =
+        passInfo.depthView ? &depthStencilAttachment : nullptr;
     const wgpu::RenderPassDescriptor renderPassDescriptor{
         .label = render_pass_label(i),
         .colorAttachmentCount = attachments.size(),
         .colorAttachments = attachments.data(),
-        .depthStencilAttachment = &depthStencilAttachment,
+        .depthStencilAttachment = depthStencilAttachmentPtr,
     };
 
     auto pass = cmd.BeginRenderPass(&renderPassDescriptor);

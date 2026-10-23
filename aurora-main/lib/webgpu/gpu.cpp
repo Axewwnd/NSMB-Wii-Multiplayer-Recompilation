@@ -418,13 +418,20 @@ Viewport calculate_present_viewport(uint32_t surface_width, uint32_t surface_hei
 }
 
 static TextureWithSampler create_depth_texture(uint32_t width, uint32_t height) {
+  const auto format = g_graphicsConfig.depthFormat;
+  if (format == wgpu::TextureFormat::Undefined) {
+    // Depth buffer disabled: Dawn prebuilt cannot allocate AHardwareBuffer
+    // with any depth format (D16/D32/Depth24Plus) on the Adreno 610
+    // (Snapdragon 680, Xiaomi MIUI) — qdgralloc rejects them all.
+    // Return an empty texture so the render pass can run without depth.
+    return {};
+  }
   const auto renderTargetSize = clamp_render_target_size(width, height);
   const wgpu::Extent3D size{
       .width = renderTargetSize.width,
       .height = renderTargetSize.height,
       .depthOrArrayLayers = 1,
   };
-  const auto format = g_graphicsConfig.depthFormat;
   const wgpu::TextureDescriptor textureDescriptor{
       .label = "Depth texture",
       .usage = wgpu::TextureUsage::RenderAttachment | wgpu::TextureUsage::TextureBinding,
@@ -974,13 +981,11 @@ bool initialize(AuroraBackend auroraBackend) {
               .height = size.native_fb_height,
               .presentMode = presentMode,
           },
-      // Depth32Float (Android format 59 / D32_FLOAT) is not supported as an
-      // AHardwareBuffer on the Adreno 610 (Snapdragon 680) driver used by
-      // Xiaomi's MIUI: qdgralloc rejects it with "Graphics metadata init
-      // failed" and Dawn cannot create the depth texture, resulting in a black
-      // screen. Depth24Plus is widely supported on mobile GPUs and avoids the
-      // AHardwareBuffer allocation failure.
-      .depthFormat = wgpu::TextureFormat::Depth24Plus,
+      // Depth buffers cannot be allocated as AHardwareBuffer on the Adreno 610
+      // (Snapdragon 680, Xiaomi MIUI): qdgralloc rejects D16/D32/Depth24Plus with
+      // "Graphics metadata init failed". Disable depth entirely so the game at
+      // least renders (depth ordering may be imperfect, but the screen won't be black).
+      .depthFormat = wgpu::TextureFormat::Undefined,
       .msaaSamples = g_config.msaa,
       .textureAnisotropy = g_config.maxTextureAnisotropy,
       .maxTextureDimension2D = maxTextureDimension2D,
