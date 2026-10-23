@@ -94,27 +94,8 @@ jobs:
       - name: Install Android SDK/NDK
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platforms;android-34 platforms;android-28 platforms;android-30 build-tools;34.0.0 ndk;r29c'
+          packages: 'platforms;android-34 platforms;android-28 platforms;android-30 build-tools;34.0.0 ndk;29.0.14206865'
           accept-android-sdk-licenses: 'true'
-
-      - name: Fix NDK sysroot API 28 -> 30 symlink (CI runner)
-        # The CI runner (windows-latest) uses Linux-style NDK paths. Create symlink from API 30 to API 28.
-        run: |
-          NDK_PATH="${ANDROID_NDK_HOME}"
-          if [ -z "${NDK_PATH}" ]; then
-            echo "ANDROID_NDK_HOME not set, trying default path"
-            NDK_PATH="/usr/local/lib/android/sdk/ndk/29.0.14206865"
-          fi
-          SYSROOT="${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android"
-          if [ -d "${SYSROOT}/30" ] && [ ! -e "${SYSROOT}/28" ]; then
-            echo "Creating symlink from API 30 to API 28 in NDK sysroot"
-            sudo ln -sf "${SYSROOT}/30" "${SYSROOT}/28"
-            echo "Symlink created successfully"
-          else
-            echo "API 30 directory not found or API 28 already exists, skipping symlink"
-            ls -la "${SYSROOT}/"
-          fi
-        shell: bash
 
       - name: Setup JDK 17
         uses: actions/setup-java@v4
@@ -167,15 +148,124 @@ jobs:
 
       - name: Configure Android Build
         shell: pwsh
-        run: ./projects/nsmbw/tools/configure-android-ci.ps1
+        run: |
+          $workspace = $env:GITHUB_WORKSPACE
+          $toolchain = Join-Path $workspace 'Launcher\artifacts\portable-tools'
+          $ndk = $env:ANDROID_NDK_HOME
+          $dependencies = Join-Path $workspace 'Launcher\artifacts\dependencies'
+          $workspaceRoot = $workspace
+          $buildDir = Join-Path $workspace 'android-build'
+          $logDir = Join-Path $workspace 'build-nsmbw\logs'
+          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+          $logPath = Join-Path $logDir 'configure-android.log'
+
+          function ConvertTo-CMakePath([string]$Path) { [IO.Path]::GetFullPath($Path).Replace('\', '/') }
+
+          if (-not (Test-Path (Join-Path $ndk 'build\cmake\android.toolchain.cmake'))) { throw "NDK missing: $ndk" }
+          if (-not (Test-Path (Join-Path $dependencies 'dawn_prebuilt_android\lib\libwebgpu_dawn.a'))) {
+              throw 'Dependencies\dawn_prebuilt_android is missing (pinned dawn-android-aarch64 v20260603.191052)'
+          }
+
+          # Keep the Windows compilers out of reach: only the NDK's clang may be found.
+          $env:PATH = "$toolchain\CMake\bin;$toolchain\Ninja;$env:SystemRoot\System32;$env:SystemRoot"
+
+          function ConvertTo-CMakePath([string]$Path) { [IO.Path]::GetFullPath($Path).Replace('\', '/') }
+
+          $configure = @(
+              '-S', (ConvertTo-CMakePath (Join-Path $workspaceRoot 'runtime')),
+              '-B', (ConvertTo-CMakePath $buildDir),
+              '-G', 'Ninja',
+              "-DCMAKE_MAKE_PROGRAM=$(ConvertTo-CMakePath (Join-Path $toolchain 'Ninja\ninja.exe'))",
+              "-DCMAKE_TOOLCHAIN_FILE=$(ConvertTo-CMakePath (Join-Path $ndk 'build\cmake\android.toolchain.cmake'))",
+              '-DANDROID_ABI=arm64-v8a',
+              # memfd_create (guest RAM) is in bionic from API 30.
+              '-DANDROID_PLATFORM=android-30',
+              '-DANDROID_NATIVE_API_LEVEL=30',
+              '-DCMAKE_SYSTEM_VERSION=30',
+              # One native library holds everything (SDL, Dawn, the game), so libc++ is linked in statically.
+              '-DANDROID_STL=c++_static',
+              '-DCMAKE_BUILD_TYPE=Release',
+              '-DAURORA_DAWN_PROVIDER=package', '-DAURORA_SDL3_PROVIDER=vendor',
+              '-DCMAKE_POLICY_DEFAULT_CMP0168=NEW', '-DFETCHCONTENT_FULLY_DISCONNECTED=ON',
+              # Target ARMv8-A baseline (Cortex-A53/A73 compatible) for Kryo 265 (Snapdragon 680)
+              # Avoids SIGILL from CRC32/AES/LSE/Atomics instructions not present on older ARMv8 cores
+              '-DCMAKE_C_FLAGS=-march=armv8-a',
+              '-DCMAKE_CXX_FLAGS=-march=armv8-a',
+              "-DMKW_TRANSLATED_COMPILE_JOBS=6"
+          )
+          foreach ($directory in Get-ChildItem -LiteralPath $dependencies -Directory) {
+              # Windows-only trees, and the Windows Dawn package (the Android one replaces it below).
+              if ($directory.Name -in @('native_prebuilt', 'cppwinrt', 'dawn_prebuilt', 'dawn_prebuilt_android')) { continue }
+              $configure += "-DFETCHCONTENT_SOURCE_DIR_$($directory.Name.ToUpperInvariant())=$(ConvertTo-CMakePath $directory.FullName)"
+          }
+          $configure += "-DFETCHCONTENT_SOURCE_DIR_DAWN_PREBUILT=$(ConvertTo-CMakePath (Join-Path $dependencies 'dawn_prebuilt_android'))"
+
+          # Windows PowerShell 5.1 turns a native program's stderr lines into error records; CMake prints
+          # ordinary status there, so run it with 'Continue' and keep the log as plain text.
+          # Also output to stdout so CI logs show the error.
+          $ErrorActionPreference = 'Continue'
+          & (Join-Path $toolchain 'CMake\bin\cmake.exe') @configure 2>&1 |
+              ForEach-Object { "$_" } | Tee-Object -FilePath $logPath -Encoding utf8
+          exit $LASTEXITCODE
 
       - name: Build Android Native (libmain.so)
         shell: pwsh
-        run: ./projects/nsmbw/tools/build-android-ci.ps1
+        run: |
+          $workspace = $env:GITHUB_WORKSPACE
+          $toolchain = Join-Path $workspace 'Launcher\artifacts\portable-tools'
+          $buildDir = Join-Path $workspace 'android-build'
+          $logDir = Join-Path $workspace 'build-nsmbw\logs'
+          $logPath = Join-Path $logDir 'build-android.log'
+          New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+
+          $ErrorActionPreference = 'Stop'
+          $env:PATH = "$toolchain\CMake\bin;$toolchain\Ninja;$env:SystemRoot\System32;$env:SystemRoot"
+
+          $arguments = @('--build', $buildDir, '--target', 'WiiCompiled', '--parallel', 10)
+          $ErrorActionPreference = 'Continue'
+          & (Join-Path $toolchain 'CMake\bin\cmake.exe') @arguments 2>&1 |
+              ForEach-Object { "$_" } | Tee-Object -FilePath $logPath -Encoding utf8
+          exit $LASTEXITCODE
 
       - name: Stage Android (copy libmain.so + assets to app)
         shell: pwsh
-        run: ./projects/nsmbw/tools/stage-android-ci.ps1
+        run: |
+          $workspace = $env:GITHUB_WORKSPACE
+          $ndk = $env:ANDROID_NDK_HOME
+          $strip = Join-Path $ndk 'toolchains\llvm\prebuilt\windows-x86_64\bin\llvm-strip.exe'
+          $buildDir = Join-Path $workspace 'android-build'
+          $nativeDir = Join-Path $workspace 'android\native'
+
+          $lib = Join-Path $buildDir 'libmain.so'
+          if (-not (Test-Path -LiteralPath $lib)) { throw "libmain.so is missing: $lib" }
+          $libDir = Join-Path $nativeDir 'jniLibs\arm64-v8a'
+          New-Item -ItemType Directory -Force $libDir | Out-Null
+          $staged = Join-Path $libDir 'libmain.so'
+          # Only the dynamic symbol table is needed at run time; JNI and SDL_main are found through it.
+          & $strip --strip-unneeded -o $staged $lib
+          if ($LASTEXITCODE -ne 0) { throw 'llvm-strip failed' }
+          # Shared libraries the build made for libmain.so's own dependencies (aurora's libpng16.so). Android
+          # resolves them from the app's library folder when libmain.so loads; system libraries stay out.
+          Get-ChildItem -LiteralPath $buildDir -Recurse -Filter '*.so' |
+              Where-Object { $_.Name -ne 'libmain.so' } | ForEach-Object {
+              & $strip --strip-unneeded -o (Join-Path $libDir $_.Name) $_.FullName
+              if ($LASTEXITCODE -ne 0) { throw "llvm-strip failed for $($_.Name)" }
+              "bundled $($_.Name)"
+          }
+
+          $assets = Join-Path $nativeDir 'assets\runtime'
+          if (Test-Path -LiteralPath $assets) { Remove-Item -LiteralPath $assets -Recurse -Force }
+          New-Item -ItemType Directory -Force $assets | Out-Null
+          # initial_pipeline_cache.db: NSMBW's pipelines (projects/nsmbw/tools/make_pipeline_seed.py), built
+          # at the first launch so effects don't stutter the first time they appear.
+          foreach ($file in 'dsp_coef.bin', 'cacert.pem', 'initial_pipeline_cache.db') {
+              Copy-Item -LiteralPath (Join-Path $buildDir $file) -Destination $assets
+          }
+          Copy-Item -LiteralPath (Join-Path $buildDir 'wii_bootstrap') -Destination $assets -Recurse
+
+          '{0:N1} MB  {1}' -f ((Get-Item $staged).Length / 1MB), $staged
+          Get-ChildItem $assets -Recurse -File | Measure-Object Length -Sum |
+              ForEach-Object { '{0} runtime files, {1:N1} MB' -f $_.Count, ($_.Sum / 1MB) }
 
       - name: Build APK (Gradle)
         run: gradle -p android assembleRelease
