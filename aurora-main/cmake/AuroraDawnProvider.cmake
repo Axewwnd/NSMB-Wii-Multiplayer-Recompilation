@@ -247,6 +247,29 @@ elseif (_aurora_dawn_provider STREQUAL "package")
       "The package must be a Dawn install tree built with DAWN_ENABLE_INSTALL=ON.")
   endif ()
 
+  # The Android package is built in a container, so its exported link interface names that
+  # machine's NDK sysroot by absolute path (…/sysroot/usr/lib/aarch64-linux-android/28/liblog.so).
+  # No other NDK - and no Windows NDK at all - has that path, and Ninja then fails with "no known
+  # rule to make it". Link the plain system library instead; the toolchain re-roots it to the
+  # sysroot and API level of the build that consumes it.
+  if (ANDROID AND TARGET dawn::webgpu_dawn)
+    get_target_property(_dawn_link_libs dawn::webgpu_dawn INTERFACE_LINK_LIBRARIES)
+    if (_dawn_link_libs)
+      set(_dawn_link_libs_fixed "")
+      foreach (_item IN LISTS _dawn_link_libs)
+        if (_item MATCHES "^/.*/sysroot/.*/lib([A-Za-z0-9_.+-]+)\\.so$")
+          string(REGEX REPLACE "^/.*/sysroot/.*/lib([A-Za-z0-9_.+-]+)\\.so$" "\\1"
+            _dawn_sysroot_library "${_item}")
+          list(APPEND _dawn_link_libs_fixed "${_dawn_sysroot_library}")
+        else ()
+          list(APPEND _dawn_link_libs_fixed "${_item}")
+        endif ()
+      endforeach ()
+      set_target_properties(dawn::webgpu_dawn PROPERTIES
+        INTERFACE_LINK_LIBRARIES "${_dawn_link_libs_fixed}")
+    endif ()
+  endif ()
+
   _aurora_dawn_set_platform_backends()
 
   get_target_property(_dawn_pkg_type dawn::webgpu_dawn TYPE)
