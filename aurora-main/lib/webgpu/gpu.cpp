@@ -974,7 +974,13 @@ bool initialize(AuroraBackend auroraBackend) {
               .height = size.native_fb_height,
               .presentMode = presentMode,
           },
-      .depthFormat = wgpu::TextureFormat::Depth32Float,
+      // Depth32Float (Android format 59 / D32_FLOAT) is not supported as an
+      // AHardwareBuffer on the Adreno 610 (Snapdragon 680) driver used by
+      // Xiaomi's MIUI: qdgralloc rejects it with "Graphics metadata init
+      // failed" and Dawn cannot create the depth texture, resulting in a black
+      // screen. Depth16 is the most widely supported depth format on mobile
+      // GPUs and avoids the AHardwareBuffer allocation failure.
+      .depthFormat = wgpu::TextureFormat::Depth16,
       .msaaSamples = g_config.msaa,
       .textureAnisotropy = g_config.maxTextureAnisotropy,
       .maxTextureDimension2D = maxTextureDimension2D,
