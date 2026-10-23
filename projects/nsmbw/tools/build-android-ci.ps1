@@ -34,5 +34,5 @@ if (-not (Test-Path $logDir)) { New-Item -ItemType Directory -Path $logDir -Forc
 
 $ErrorActionPreference = 'Continue'
 & (Join-Path $portableTools 'CMake\bin\cmake.exe') @arguments 2>&1 |
-    ForEach-Object { "$_" } | Out-File -LiteralPath $LogPath -Encoding utf8
+    ForEach-Object { "$_" } | Tee-Object -FilePath $LogPath -Encoding utf8
 exit $LASTEXITCODE
