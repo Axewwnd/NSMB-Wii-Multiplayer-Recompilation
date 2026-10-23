@@ -47,6 +47,7 @@ $configure = @(
     # memfd_create (guest RAM) is in bionic from API 30.
     '-DANDROID_PLATFORM=android-30',
     '-DANDROID_NATIVE_API_LEVEL=30',
+    '-DCMAKE_SYSTEM_VERSION=30',
     # One native library holds everything (SDL, Dawn, the game), so libc++ is linked in statically.
     '-DANDROID_STL=c++_static',
     '-DCMAKE_BUILD_TYPE=Release',
