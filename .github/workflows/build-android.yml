@@ -111,10 +111,10 @@ jobs:
               if ($LASTEXITCODE -ne 0) { throw "sdkmanager failed to install NDK $ndkVersion" }
           }
 
-          # Verify
+          # Verify - read as single string to avoid array matching issues
           $versionFile = Join-Path $ndkDir 'source.properties'
           if (-not (Test-Path $versionFile)) { throw "NDK version file missing: $versionFile" }
-          $content = Get-Content $versionFile
+          $content = [IO.File]::ReadAllText($versionFile)
           Write-Host "NDK version file: $content"
           if ($content -notmatch "Pkg\.Revision = $ndkVersion") { throw "NDK version mismatch! Expected $ndkVersion" }
 
