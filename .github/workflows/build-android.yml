@@ -41,6 +41,34 @@ jobs:
           key: ${{ runner.os }}-nuget-${{ hashFiles('translator/Translator.sln', '**/*.csproj') }}
           restore-keys: ${{ runner.os }}-nuget-
 
+      - name: Cache Translator Build
+        uses: actions/cache@v5
+        with:
+          path: translator/src/Translator.Cli/bin/Release/net8.0
+          key: ${{ runner.os }}-translator-build-${{ hashFiles('translator/Translator.sln', '**/*.csproj') }}
+          restore-keys: ${{ runner.os }}-translator-build-
+
+      - name: Cache Generated Shards
+        uses: actions/cache@v5
+        with:
+          path: |
+            generated/build_shards
+            generated/functions
+            build/base
+          key: ${{ runner.os }}-shards-${{ hashFiles('projects/nsmbw/recomp.yml', 'game/main.dol', 'game/nsmbw_linked.rel') }}
+          restore-keys: ${{ runner.os }}-shards-
+
+      - name: Check if shards exist
+        id: shards_check
+        shell: pwsh
+        run: |
+          $shards = "generated/build_shards/shards.cmake"
+          if (Test-Path $shards) {
+              Write-Host "SHARDS_EXIST=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          } else {
+              Write-Host "SHARDS_EXIST=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          }
+
       - name: Restore Translator
         run: dotnet restore translator/Translator.sln
 
@@ -48,6 +76,7 @@ jobs:
         run: dotnet build translator/Translator.sln -c Release --no-restore
 
       - name: Run Translator (generate build shards)
+        if: steps.shards_check.outputs.SHARDS_EXIST != 'true'
         shell: pwsh
         run: |
           $ws = $env:GITHUB_WORKSPACE
@@ -151,9 +180,30 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('android/**/*.gradle*', 'android/gradle.properties') }}
           restore-keys: ${{ runner.os }}-gradle-
 
+      - name: Cache Portable Tools (LLVM-MinGW, CMake, Ninja)
+        uses: actions/cache@v5
+        with:
+          path: Launcher/artifacts/portable-tools
+          key: ${{ runner.os }}-portable-tools-${{ hashFiles('Launcher/Prepare-PortableTools.ps1') }}
+          restore-keys: ${{ runner.os }}-portable-tools-
+
       - name: Prepare Portable Tools (LLVM-MinGW, CMake, Ninja)
         shell: pwsh
         run: ./Launcher/Prepare-PortableTools.ps1
+
+      - name: Cache Dependencies (Android pinned sources)
+        uses: actions/cache@v5
+        with:
+          path: Launcher/artifacts/dependencies
+          key: ${{ runner.os }}-deps-android-${{ hashFiles('aurora-main/CMakeLists.txt', 'aurora-main/extern/CMakeLists.txt', 'aurora-main/cmake/AuroraDawnProvider.cmake', 'aurora-main/cmake/AuroraLibUSB.cmake', 'aurora-main/cmake/AuroraSDL3Provider.cmake', 'runtime/cmake/MbedTLSPin.cmake') }}
+          restore-keys: ${{ runner.os }}-deps-android-
+
+      - name: Cache Downloads (dependency archives)
+        uses: actions/cache@v5
+        with:
+          path: artifacts/downloads
+          key: ${{ runner.os }}-deps-downloads-${{ hashFiles('aurora-main/CMakeLists.txt', 'aurora-main/extern/CMakeLists.txt', 'aurora-main/cmake/AuroraDawnProvider.cmake', 'aurora-main/cmake/AuroraLibUSB.cmake', 'aurora-main/cmake/AuroraSDL3Provider.cmake', 'runtime/cmake/MbedTLSPin.cmake') }}
+          restore-keys: ${{ runner.os }}-deps-downloads-
 
       - name: Prepare Dependencies (Android only - skip Windows deps)
         shell: pwsh
