@@ -90,11 +90,36 @@ jobs:
               Pop-Location
           }
 
-      - name: Install Android SDK/NDK (pinned NDK 29)
+      - name: Install Android SDK (platforms, build-tools)
         uses: android-actions/setup-android@v3
         with:
-          packages: 'platforms;android-34 platforms;android-28 platforms;android-30 build-tools;34.0.0 ndk;r29c'
+          packages: 'platforms;android-34 platforms;android-28 platforms;android-30 build-tools;34.0.0'
           accept-android-sdk-licenses: 'true'
+
+      - name: Install NDK 29.0.14206865 (pinned)
+        shell: pwsh
+        run: |
+          $ndkVersion = '29.0.14206865'
+          $ndkDir = "C:\Android\android-sdk\ndk\$ndkVersion"
+          $sdkmanager = "C:\Android\android-sdk\cmdline-tools\16.0\bin\sdkmanager.bat"
+
+          if (Test-Path "$ndkDir\build\cmake\android.toolchain.cmake") {
+              Write-Host "NDK $ndkVersion already installed at $ndkDir"
+          } else {
+              Write-Host "Installing NDK $ndkVersion via sdkmanager..."
+              & $sdkmanager "ndk;$ndkVersion"
+              if ($LASTEXITCODE -ne 0) { throw "sdkmanager failed to install NDK $ndkVersion" }
+          }
+
+          # Verify
+          $versionFile = Join-Path $ndkDir 'source.properties'
+          if (-not (Test-Path $versionFile)) { throw "NDK version file missing: $versionFile" }
+          $content = Get-Content $versionFile
+          Write-Host "NDK version file: $content"
+          if ($content -notmatch "Pkg\.Revision = $ndkVersion") { throw "NDK version mismatch! Expected $ndkVersion" }
+
+          # Set ANDROID_NDK_HOME for subsequent steps
+          Write-Host "ANDROID_NDK_HOME=$ndkDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Verify NDK version
         shell: pwsh
