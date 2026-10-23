@@ -214,7 +214,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version 3.0
 
-          $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+          $repoRoot = $env:GITHUB_WORKSPACE
           $auroraCMake = Join-Path $repoRoot 'aurora-main\CMakeLists.txt'
           $auroraExtern = Join-Path $repoRoot 'aurora-main\extern\CMakeLists.txt'
           $auroraLibUsb = Join-Path $repoRoot 'aurora-main\cmake\AuroraLibUSB.cmake'
@@ -304,7 +304,7 @@ jobs:
           )
 
           $Destination = Join-Path $repoRoot 'Launcher\artifacts\dependencies'
-          $downloads = Join-Path $PSScriptRoot 'artifacts\downloads'
+          $downloads = Join-Path $repoRoot 'artifacts\downloads'
           $tar = Join-Path $env:SystemRoot 'System32\tar.exe'
           if (-not (Test-Path -LiteralPath $tar -PathType Leaf)) { throw "Windows archive tool is missing: $tar" }
           [IO.Directory]::CreateDirectory($Destination) | Out-Null
